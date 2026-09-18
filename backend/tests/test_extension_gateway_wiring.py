@@ -150,6 +150,50 @@ async def test_service_originated_cancelled_error_does_not_abort_stop_batch():
 
 
 @pytest.mark.asyncio
+async def test_host_cancellation_does_not_skip_remaining_service_stops():
+    from deerflow.extensions.gateway import stop_services
+
+    events: list[str] = []
+    stop_started = asyncio.Event()
+    allow_stop = asyncio.Event()
+
+    class _BlockingService(_Service):
+        async def stop(self) -> None:
+            self.events.append(f"stop:{self.name}")
+            stop_started.set()
+            await allow_stop.wait()
+
+    first = _Service("first", events)
+    second = _BlockingService("second", events)
+    registry = ExtensionRegistry()
+    with registry.attributed_to("first:install"):
+        registry.service(first)
+    with registry.attributed_to("second:install"):
+        registry.service(second)
+
+    stop_task = asyncio.create_task(stop_services(registry.build(), timeout_seconds=1.0))
+    await asyncio.wait_for(stop_started.wait(), timeout=1)
+
+    stop_task.cancel()
+    for _ in range(10):
+        await asyncio.sleep(0)
+
+    assert not stop_task.done(), "host cancellation released the extension stop batch"
+    assert events == ["stop:second"]
+
+    stop_task.cancel()
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert not stop_task.done(), "repeated cancellation released the extension stop batch"
+
+    allow_stop.set()
+    with pytest.raises(asyncio.CancelledError):
+        await stop_task
+
+    assert events == ["stop:second", "stop:first"]
+
+
+@pytest.mark.asyncio
 async def test_each_service_stop_has_its_own_timeout_budget():
     from deerflow.extensions.gateway import stop_services
 

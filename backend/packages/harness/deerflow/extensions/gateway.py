@@ -613,13 +613,12 @@ async def start_services(
     return diagnostics
 
 
-async def stop_services(
+async def _stop_services_impl(
     extensions: LoadedExtensions,
-    timeout_seconds: float = DEFAULT_STOP_TIMEOUT_SECONDS,
+    timeout_seconds: float,
     *,
-    service_entries: tuple[tuple[str, Any], ...] | list[tuple[str, Any]] | None = None,
+    service_entries: tuple[tuple[str, Any], ...] | list[tuple[str, Any]] | None,
 ) -> list[Diagnostic]:
-    """Stop services in reverse order with an independent budget per item."""
     diagnostics: list[Diagnostic] = []
     entries = extensions.services if service_entries is None else service_entries
     for source, service in reversed(entries):
@@ -648,3 +647,36 @@ async def stop_services(
             diagnostics.append(Diagnostic.error(source, message))
             logger.exception("Extension %s: %s", source, message)
     return diagnostics
+
+
+async def stop_services(
+    extensions: LoadedExtensions,
+    timeout_seconds: float = DEFAULT_STOP_TIMEOUT_SECONDS,
+    *,
+    service_entries: tuple[tuple[str, Any], ...] | list[tuple[str, Any]] | None = None,
+) -> list[Diagnostic]:
+    """Stop services in reverse order without letting host cancellation skip owners."""
+
+    stop_task = asyncio.create_task(
+        _stop_services_impl(
+            extensions,
+            timeout_seconds,
+            service_entries=service_entries,
+        ),
+        name="extension-service-stop-batch",
+    )
+    cancellation: asyncio.CancelledError | None = None
+    while not stop_task.done():
+        try:
+            await asyncio.shield(stop_task)
+        except asyncio.CancelledError as exc:
+            if cancellation is None:
+                cancellation = exc
+
+    if cancellation is not None:
+        try:
+            stop_task.result()
+        except Exception as exc:
+            raise cancellation from exc
+        raise cancellation
+    return stop_task.result()
