@@ -2043,7 +2043,30 @@ async def sse_consumer(
         # and only on the creator's own stream — never on an observer join.
         if apply_on_disconnect and not gap_emitted and not record.store_only and record.status in (RunStatus.pending, RunStatus.running):
             if record.on_disconnect == DisconnectMode.cancel:
-                await run_mgr.cancel(record.run_id)
+                await _cancel_run_on_disconnect(run_mgr, record.run_id)
+
+
+async def _cancel_run_on_disconnect(run_mgr: RunManager, run_id: str) -> None:
+    """Finish cancel-on-disconnect cleanup before propagating caller cancellation."""
+    cancel_task = asyncio.create_task(
+        run_mgr.cancel(run_id),
+        name=f"disconnect-run-cancel:{run_id}",
+    )
+    cancellation: asyncio.CancelledError | None = None
+    while not cancel_task.done():
+        try:
+            await asyncio.shield(cancel_task)
+        except asyncio.CancelledError as exc:
+            if cancellation is None:
+                cancellation = exc
+
+    if cancellation is not None:
+        try:
+            cancel_task.result()
+        except Exception as exc:
+            raise cancellation from exc
+        raise cancellation
+    cancel_task.result()
 
 
 async def wait_for_run_completion(
@@ -2114,4 +2137,4 @@ async def wait_for_run_completion(
     finally:
         if not completed and record.status in (RunStatus.pending, RunStatus.running):
             if record.on_disconnect == DisconnectMode.cancel:
-                await run_mgr.cancel(record.run_id)
+                await _cancel_run_on_disconnect(run_mgr, record.run_id)

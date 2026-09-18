@@ -22,6 +22,8 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
+import pytest
+
 from deerflow.runtime import ORPHAN_RECOVERY_STOP_REASON, RunManager, RunRecord, RunStatus
 from deerflow.runtime.runs.schemas import DisconnectMode
 from deerflow.runtime.stream_bridge.memory import MemoryStreamBridge
@@ -188,6 +190,62 @@ class TestWaitForRunCompletion:
             except asyncio.CancelledError:
                 pass
             assert sleeper.done()
+
+        asyncio.run(run())
+
+    def test_repeated_cancellation_cannot_interrupt_disconnect_run_cancel(self) -> None:
+        """The request task must retain ownership until cancel-on-disconnect settles."""
+        from app.gateway.services import wait_for_run_completion
+
+        async def run() -> None:
+            bridge = MemoryStreamBridge()
+            record = RunRecord(
+                run_id="run-disconnect-cleanup",
+                thread_id=THREAD_ID,
+                assistant_id=None,
+                status=RunStatus.running,
+                on_disconnect=DisconnectMode.cancel,
+            )
+            cancel_started = asyncio.Event()
+            allow_cancel = asyncio.Event()
+            cancel_finished = asyncio.Event()
+
+            class _BlockingRunManager:
+                async def cancel(self, run_id: str) -> None:
+                    assert run_id == record.run_id
+                    cancel_started.set()
+                    await allow_cancel.wait()
+                    cancel_finished.set()
+
+            async def publish_once() -> None:
+                await asyncio.sleep(0)
+                await bridge.publish(record.run_id, "values", {"step": 1})
+
+            asyncio.create_task(publish_once())
+            task = asyncio.create_task(
+                wait_for_run_completion(
+                    bridge,
+                    record,
+                    _FakeRequest(disconnect_after=0),
+                    _BlockingRunManager(),
+                )
+            )
+            await asyncio.wait_for(cancel_started.wait(), timeout=1)
+
+            task.cancel()
+            for _ in range(10):
+                await asyncio.sleep(0)
+            assert not task.done(), "disconnect cleanup returned before run cancellation finished"
+
+            task.cancel()
+            for _ in range(10):
+                await asyncio.sleep(0)
+            assert not task.done(), "repeated cancellation interrupted disconnect cleanup"
+
+            allow_cancel.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert cancel_finished.is_set()
 
         asyncio.run(run())
 
