@@ -15,6 +15,7 @@ idempotent revision helpers.
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 
 import pytest
@@ -147,4 +148,46 @@ async def test_slow_upgrade_does_not_corrupt_concurrent_state(monkeypatch, tmp_p
         )
         assert await _alembic_version(engine) == HEAD
     finally:
+        await engine.dispose()async def test_cancelled_bootstrap_keeps_sqlite_lock_until_stamp_worker_finishes(monkeypatch, tmp_path: Path) -> None:
+    """Caller cancellation must not release the bootstrap mutex ahead of Alembic."""
+    engine = create_async_engine(_url(tmp_path))
+    stamp_started = threading.Event()
+    allow_stamp = threading.Event()
+    second_reflect_started = threading.Event()
+    reflect_calls = 0
+    original_reflect = bootstrap_mod._reflect_state
+
+    def blocking_stamp(_cfg, _revision: str) -> None:
+        stamp_started.set()
+        assert allow_stamp.wait(5), "test did not release the blocked stamp worker"
+
+    def recording_reflect(sync_conn):
+        nonlocal reflect_calls
+        reflect_calls += 1
+        if reflect_calls >= 2:
+            second_reflect_started.set()
+        return original_reflect(sync_conn)
+
+    monkeypatch.setattr(bootstrap_mod, "_stamp", blocking_stamp)
+    monkeypatch.setattr(bootstrap_mod, "_upgrade", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bootstrap_mod, "_reflect_state", recording_reflect)
+
+    first = asyncio.create_task(bootstrap_schema(engine, backend="sqlite"))
+    second: asyncio.Task[None] | None = None
+    try:
+        assert await asyncio.to_thread(stamp_started.wait, 2)
+        first.cancel()
+        for _ in range(10):
+            await asyncio.sleep(0)
+        second = asyncio.create_task(bootstrap_schema(engine, backend="sqlite"))
+        await asyncio.sleep(0.05)
+        assert not second_reflect_started.is_set(), (
+            "a cancelled bootstrap released the SQLite mutex while its Alembic worker was still running"
+        )
+    finally:
+        allow_stamp.set()
+        await asyncio.gather(first, *(task for task in (second,) if task is not None), return_exceptions=True)
         await engine.dispose()
+
+
+
