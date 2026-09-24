@@ -22,7 +22,12 @@ class _BlockingPolicyProvider(SandboxProvider):
         self.release = threading.Event()
         self.completed: list[str] = []
 
-    def acquire(self, thread_id: str | None = None, *, user_id: str | None = None) -> str:
+    def acquire(
+        self,
+        thread_id: str | None = None,
+        *,
+        user_id: str | None = None,
+    ) -> str:
         del thread_id, user_id
         return "sandbox-1"
 
@@ -48,7 +53,12 @@ class _BlockingPolicyProvider(SandboxProvider):
         del sandbox_id
         return self._block("deny", True)
 
-    def decide_network_policy_request(self, sandbox_id: str, request_id: str, decision: str) -> bool:
+    def decide_network_policy_request(
+        self,
+        sandbox_id: str,
+        request_id: str,
+        decision: str,
+    ) -> bool:
         del sandbox_id, request_id, decision
         return self._block("decide", True)
 
@@ -85,7 +95,9 @@ async def test_async_network_policy_mutation_drains_before_cancellation(
         assert await asyncio.to_thread(provider.entered[kind].wait, 1)
         await _deliver_repeated_cancellation(task)
 
-        assert not task.done(), "caller cancellation escaped while the policy mutation worker was still running"
+        assert not task.done(), (
+            "caller cancellation escaped while the policy mutation worker was still running"
+        )
         assert provider.completed == []
 
         provider.release.set()
@@ -131,7 +143,9 @@ async def test_abefore_agent_drains_network_policy_response_before_cancellation(
         assert await asyncio.to_thread(entered.wait, 1)
         await _deliver_repeated_cancellation(task)
 
-        assert not task.done(), "caller cancellation escaped while the policy decision worker was still running"
+        assert not task.done(), (
+            "caller cancellation escaped while the policy decision worker was still running"
+        )
         assert not completed.is_set()
 
         release.set()
