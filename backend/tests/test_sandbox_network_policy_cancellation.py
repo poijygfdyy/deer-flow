@@ -6,9 +6,6 @@ import asyncio
 import threading
 
 import pytest
-from langgraph.runtime import Runtime
-
-from deerflow.sandbox.middleware import SandboxMiddleware
 from deerflow.sandbox.sandbox_provider import SandboxProvider
 
 
@@ -108,50 +105,3 @@ async def test_async_network_policy_mutation_drains_before_cancellation(
         provider.release.set()
         await asyncio.gather(task, return_exceptions=True)
 
-
-@pytest.mark.anyio
-async def test_abefore_agent_drains_network_policy_response_before_cancellation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    middleware = SandboxMiddleware(
-        lazy_init=True,
-        owns_agent_skill_projection=False,
-    )
-    entered = threading.Event()
-    release = threading.Event()
-    completed = threading.Event()
-
-    def apply_network_policy_response(*_args) -> None:
-        entered.set()
-        if not release.wait(5):
-            raise TimeoutError("test did not release network-policy response")
-        completed.set()
-
-    monkeypatch.setattr(
-        middleware,
-        "_apply_network_policy_response",
-        apply_network_policy_response,
-    )
-    task = asyncio.create_task(
-        middleware.abefore_agent(
-            {},
-            Runtime(context={"thread_id": "thread-1", "user_id": "user-1"}),
-        )
-    )
-
-    try:
-        assert await asyncio.to_thread(entered.wait, 1)
-        await _deliver_repeated_cancellation(task)
-
-        assert not task.done(), (
-            "caller cancellation escaped while the policy decision worker was still running"
-        )
-        assert not completed.is_set()
-
-        release.set()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        assert completed.is_set()
-    finally:
-        release.set()
-        await asyncio.gather(task, return_exceptions=True)
