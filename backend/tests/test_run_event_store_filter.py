@@ -69,6 +69,11 @@ async def _check_no_task_id_returns_all(store):
     assert len(everything) == 7  # 2 starts + 5 steps
 
 
+async def _check_empty_event_types_returns_none(store):
+    await _seed_two_tasks(store)
+    assert await store.list_events("t1", "r1", event_types=[]) == []
+
+
 # -- Memory backend --
 
 
@@ -95,6 +100,11 @@ async def test_memory_task_id_after_seq_paginate():
 @pytest.mark.anyio
 async def test_memory_no_task_id_returns_all():
     await _check_no_task_id_returns_all(MemoryRunEventStore())
+
+
+@pytest.mark.anyio
+async def test_memory_empty_event_types_returns_none():
+    await _check_empty_event_types_returns_none(MemoryRunEventStore())
 
 
 # -- DB backend (sqlite): exercises the JSON-field filter on a real dialect --
@@ -139,6 +149,19 @@ async def test_db_no_task_id_returns_all(tmp_path):
         await close_engine()
 
 
+@pytest.mark.anyio
+async def test_db_empty_event_types_returns_none(tmp_path):
+    from deerflow.persistence.engine import close_engine, get_session_factory, init_engine
+    from deerflow.runtime.events.store.db import DbRunEventStore
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'test.db'}"
+    await init_engine("sqlite", url=url, sqlite_dir=str(tmp_path))
+    try:
+        await _check_empty_event_types_returns_none(DbRunEventStore(get_session_factory()))
+    finally:
+        await close_engine()
+
+
 # -- JSONL backend --
 
 
@@ -154,3 +177,10 @@ async def test_jsonl_task_id_after_seq_paginate(tmp_path):
     from deerflow.runtime.events.store.jsonl import JsonlRunEventStore
 
     await _check_task_id_after_seq_paginate(JsonlRunEventStore(base_dir=str(tmp_path)))
+
+
+@pytest.mark.anyio
+async def test_jsonl_empty_event_types_returns_none(tmp_path):
+    from deerflow.runtime.events.store.jsonl import JsonlRunEventStore
+
+    await _check_empty_event_types_returns_none(JsonlRunEventStore(base_dir=str(tmp_path)))
