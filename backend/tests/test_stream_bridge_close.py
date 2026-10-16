@@ -35,6 +35,7 @@ async def test_close_wakes_waiting_subscriber_and_rejects_new_work():
         pending = asyncio.create_task(anext(subscriber))
         await asyncio.wait_for(condition.wait_started.wait(), timeout=1.0)
         await bridge.close()
+        await bridge.close()  # Repeated close remains safe.
 
         assert await asyncio.wait_for(pending, timeout=1.0) is END_SENTINEL
         with pytest.raises(StopAsyncIteration):

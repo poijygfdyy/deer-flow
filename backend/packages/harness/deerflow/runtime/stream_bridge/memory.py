@@ -200,7 +200,7 @@ class MemoryStreamBridge(StreamBridge):
         self._counters.pop(run_id, None)
 
     async def close(self) -> None:
-        if self._closed:
+        if self._closed and not self._streams and not self._counters:
             return
         # Stop existing subscribers before dropping the bridge's indexes. They
         # hold direct references to _RunStream, so clearing the dict alone does
