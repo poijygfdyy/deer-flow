@@ -36,6 +36,7 @@ class MemoryStreamBridge(StreamBridge):
         self._maxsize = max(1, queue_maxsize)
         self._streams: dict[str, _RunStream] = {}
         self._counters: dict[str, int] = {}
+        self._closed = False
 
     # -- helpers ---------------------------------------------------------------
 
@@ -106,9 +107,13 @@ class MemoryStreamBridge(StreamBridge):
     # -- StreamBridge API ------------------------------------------------------
 
     async def publish(self, run_id: str, event: str, data: Any) -> None:
+        if self._closed:
+            raise RuntimeError("stream bridge is closed")
         stream = self._get_or_create_stream(run_id)
         entry = StreamEvent(id=self._next_id(run_id), event=event, data=data)
         async with stream.condition:
+            if self._closed:
+                raise RuntimeError("stream bridge is closed")
             stream.events.append(entry)
             if len(stream.events) > self._maxsize:
                 overflow = len(stream.events) - self._maxsize
@@ -117,8 +122,12 @@ class MemoryStreamBridge(StreamBridge):
             stream.condition.notify_all()
 
     async def publish_end(self, run_id: str) -> None:
+        if self._closed:
+            raise RuntimeError("stream bridge is closed")
         stream = self._get_or_create_stream(run_id)
         async with stream.condition:
+            if self._closed:
+                raise RuntimeError("stream bridge is closed")
             stream.ended = True
             stream.condition.notify_all()
 
@@ -130,6 +139,9 @@ class MemoryStreamBridge(StreamBridge):
         heartbeat_interval: float | None = None,
     ) -> AsyncIterator[StreamItem]:
         heartbeat_interval = self._resolve_heartbeat_interval(heartbeat_interval)
+        if self._closed:
+            yield END_SENTINEL
+            return
         stream = self._get_or_create_stream(run_id)
         async with stream.condition:
             start = self._resolve_start_offset(stream, last_event_id)
@@ -188,5 +200,16 @@ class MemoryStreamBridge(StreamBridge):
         self._counters.pop(run_id, None)
 
     async def close(self) -> None:
+        if self._closed:
+            return
+        # Stop existing subscribers before dropping the bridge's indexes. They
+        # hold direct references to _RunStream, so clearing the dict alone does
+        # not wake a consumer blocked on that stream's condition.
+        self._closed = True
+        streams = list(self._streams.values())
+        for stream in streams:
+            async with stream.condition:
+                stream.ended = True
+                stream.condition.notify_all()
         self._streams.clear()
         self._counters.clear()
