@@ -909,7 +909,7 @@ class LocalSandbox(Sandbox):
                 process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 timed_out = True
-                LocalSandbox._terminate_process_group(process)
+                LocalSandbox._terminate_process_group(process, process_group_id)
             returncode = process.returncode if process.returncode is not None else 0
         finally:
             join_timeout = 10 if timed_out or not LocalSandbox._process_group_exists(process_group_id) else _PIPE_DRAIN_JOIN_TIMEOUT_SECONDS
@@ -923,14 +923,19 @@ class LocalSandbox(Sandbox):
         return stdout, stderr, returncode, timed_out
 
     @staticmethod
-    def _terminate_process_group(process: subprocess.Popen) -> None:
+    def _terminate_process_group(
+        process: subprocess.Popen,
+        process_group_id: int | None = None,
+    ) -> None:
         """Kill the command's whole process group, then reap it.
 
-        Falls back to killing just the direct child if the group is already
-        gone (e.g. the command exited between the timeout and this call).
+        Prefer the group ID captured after launch: the shell can exit between
+        the timeout and this call while descendants remain in its process
+        group. Look up the ID only as a fallback when launch-time capture failed.
         """
         try:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            pgid = process_group_id if process_group_id is not None else os.getpgid(process.pid)
+            os.killpg(pgid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError, OSError):
             # The process group is already gone (the command exited in the race
             # between the timeout and this call); fall back to killing just the

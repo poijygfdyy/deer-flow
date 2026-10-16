@@ -11,6 +11,8 @@ semantics, while the shared tests pin the user-facing timeout notice.
 
 import os
 import shlex
+import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -159,6 +161,55 @@ def test_foreground_timeout_kills_whole_process_group(tmp_path):
     first_mtime = marker.stat().st_mtime
     time.sleep(1.5)
     assert marker.stat().st_mtime == first_mtime, "process group survived the timeout"
+
+
+@posix_only
+def test_timeout_uses_captured_process_group_if_shell_exits_before_signal(monkeypatch):
+    """A shell PID can disappear after wait times out while its descendants remain."""
+    class ExitingShell:
+        pid = 4242
+        returncode = None
+
+        def __init__(self):
+            self.wait_calls = 0
+            self.killed = False
+
+        def wait(self, timeout=None):
+            self.wait_calls += 1
+            if self.wait_calls == 1:
+                raise subprocess.TimeoutExpired("fake shell", timeout)
+            self.returncode = -signal.SIGKILL if self.killed else 0
+            return self.returncode
+
+        def kill(self):
+            self.killed = True
+
+    process = ExitingShell()
+    monkeypatch.setattr(local_sandbox.subprocess, "Popen", lambda *args, **kwargs: process)
+    getpgid_calls = 0
+
+    def getpgid(_pid):
+        nonlocal getpgid_calls
+        getpgid_calls += 1
+        if getpgid_calls == 1:
+            return 4242
+        raise ProcessLookupError
+
+    monkeypatch.setattr(local_sandbox.os, "getpgid", getpgid)
+    killed_groups = []
+
+    def killpg(pgid, sig):
+        if sig == 0:
+            raise ProcessLookupError
+        killed_groups.append((pgid, sig))
+
+    monkeypatch.setattr(local_sandbox.os, "killpg", killpg)
+
+    _, _, _, timed_out = LocalSandbox._run_posix_command(["/bin/sh", "-c", "ignored"], timeout=0.01)
+
+    assert timed_out
+    assert (4242, signal.SIGKILL) in killed_groups
+    assert not process.killed
 
 
 @posix_only
