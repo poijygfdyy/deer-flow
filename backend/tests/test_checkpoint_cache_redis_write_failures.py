@@ -39,9 +39,7 @@ class _SelectiveFailingSerde:
 
 
 @pytest.mark.anyio
-async def test_serialization_failure_skips_bad_entry_but_keeps_other_writes(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+async def test_serialization_failure_skips_bad_entry_but_keeps_other_writes(caplog: pytest.LogCaptureFixture) -> None:
     client = _Client()
     cache = RedisCheckpointHistoryCache.__new__(RedisCheckpointHistoryCache)
     cache._client = client
