@@ -5,6 +5,10 @@ before SCAN, and checks returned byte/string keys against that stem before UNLIN
 Do not interpret operator `key_prefix` text as a pattern or widen thread deletion
 to sibling namespaces. Keep the cursor loop and outage/TTL fallback unchanged.
 
+Redis history cache writes are best-effort: log and skip a per-entry serializer
+failure without aborting checkpoint-history composition. Redis transport failures
+must retain the existing all-miss / skipped-write fallback.
+
 ### Stream Bridge Heartbeats
 
 Observed Redis streams removed during replay yield `StreamGap` with empty bounds; initially empty streams still wait. After this gap, `/wait` refreshes store-only status and completes only for a terminal run with no retained stream.
