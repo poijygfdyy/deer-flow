@@ -99,10 +99,22 @@ class RedisCheckpointHistoryCache:
             return
         try:
             pipe = self._client.pipeline(transaction=False)
+            queued = 0
             for key, entry in entries.items():
-                tag, data = self._serde.dumps_typed(entry)
-                pipe.set(key, tag.encode() + _TAG_SEPARATOR + data, ex=self._ttl)
-            await pipe.execute()
+                try:
+                    tag, data = self._serde.dumps_typed(entry)
+                    value = tag.encode() + _TAG_SEPARATOR + data
+                except Exception as exc:  # noqa: BLE001 - cache serialization is best-effort
+                    logger.warning(
+                        "checkpoint history cache encode failed; skipping entry (key=%s): %s",
+                        key,
+                        type(exc).__name__,
+                    )
+                    continue
+                pipe.set(key, value, ex=self._ttl)
+                queued += 1
+            if queued:
+                await pipe.execute()
         except _redis_error() as exc:
             # Writes are optional; the next read simply recomputes the history.
             logger.warning("checkpoint history cache write failed; skipping: %s", exc)
