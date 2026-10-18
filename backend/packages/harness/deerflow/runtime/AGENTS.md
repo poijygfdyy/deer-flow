@@ -335,3 +335,6 @@ unknown or cancelled write outcomes cannot yield a receipt or be replayed. Only
 proven-not-committed batches may be retried. Normal close stops new evidence
 producers and drains already admitted cross-thread callbacks inside its operation
 lock before flushing and detaching; do not reacquire that lock through `flush()`.
+
+RunEvent store `list_events(event_types=...)` distinguishes omitted `None` (all types)
+from explicit `[]` (no types); DB, Memory, and JSONL must preserve this parity.

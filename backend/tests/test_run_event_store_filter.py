@@ -154,3 +154,36 @@ async def test_jsonl_task_id_after_seq_paginate(tmp_path):
     from deerflow.runtime.events.store.jsonl import JsonlRunEventStore
 
     await _check_task_id_after_seq_paginate(JsonlRunEventStore(base_dir=str(tmp_path)))
+
+
+async def _check_empty_event_types(store):
+    """An explicit empty filter must never expand to all run events."""
+    await _seed_two_tasks(store)
+    assert await store.list_events("t1", "r1", event_types=[]) == []
+    assert len(await store.list_events("t1", "r1", event_types=None)) == 7
+    assert len(await store.list_events("t1", "r1", event_types=["subagent.step"])) == 5
+
+
+@pytest.mark.anyio
+async def test_memory_empty_event_types():
+    await _check_empty_event_types(MemoryRunEventStore())
+
+
+@pytest.mark.anyio
+async def test_db_empty_event_types(tmp_path):
+    from deerflow.persistence.engine import close_engine, get_session_factory, init_engine
+    from deerflow.runtime.events.store.db import DbRunEventStore
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'test.db'}"
+    await init_engine("sqlite", url=url, sqlite_dir=str(tmp_path))
+    try:
+        await _check_empty_event_types(DbRunEventStore(get_session_factory()))
+    finally:
+        await close_engine()
+
+
+@pytest.mark.anyio
+async def test_jsonl_empty_event_types(tmp_path):
+    from deerflow.runtime.events.store.jsonl import JsonlRunEventStore
+
+    await _check_empty_event_types(JsonlRunEventStore(base_dir=str(tmp_path)))
