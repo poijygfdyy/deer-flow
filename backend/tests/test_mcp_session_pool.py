@@ -3145,3 +3145,57 @@ async def test_mcp_tools_routed_to_source_server_with_prefix_overlap():
     routing = dict(routed)
     assert routing["web_scraper_search"] == "web_scraper", f"tool mis-routed to {routing.get('web_scraper_search')!r}, expected 'web_scraper'"
     assert routing["web_open"] == "web"
+
+
+@pytest.mark.asyncio
+async def test_session_pool_disconnect_cleanup_is_bounded_and_tracked(monkeypatch):
+    """A stalled owner exit must not hold the disconnected tool call forever."""
+    monkeypatch.setattr(MCPSessionPool, "SESSION_CLOSE_TIMEOUT", 0.01)
+    pool = MCPSessionPool()
+    exit_started = asyncio.Event()
+    release_exit = asyncio.Event()
+    exit_finished = asyncio.Event()
+    session = AsyncMock()
+    session.initialize = AsyncMock()
+    disconnect_error = anyio.ClosedResourceError()
+    session.call_tool = AsyncMock(side_effect=disconnect_error)
+
+    class Cm:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, *_args):
+            exit_started.set()
+            await release_exit.wait()
+            exit_finished.set()
+            return False
+
+    connection = {"transport": "stdio", "command": "x", "args": []}
+    with patch("langchain_mcp_adapters.sessions.create_session", return_value=Cm()):
+        assert await pool.get_session("srv", "scope", connection) is session
+        call = asyncio.create_task(
+            call_pooled_session_tool(
+                session,
+                pool,
+                server_name="srv",
+                scope_key="scope",
+                tool_name="act",
+                arguments={},
+                call_kwargs={},
+            )
+        )
+        try:
+            await asyncio.wait_for(exit_started.wait(), 1)
+            with pytest.raises(anyio.ClosedResourceError) as exc_info:
+                await asyncio.wait_for(asyncio.shield(call), 1)
+            assert exc_info.value is disconnect_error
+            assert pool._teardown_tasks
+            assert not exit_finished.is_set()
+        finally:
+            release_exit.set()
+            await asyncio.gather(call, return_exceptions=True)
+            await pool.close_all()
+            await asyncio.gather(*list(pool._teardown_tasks), return_exceptions=True)
+
+    assert exit_finished.is_set()
+    assert not pool._teardown_tasks
