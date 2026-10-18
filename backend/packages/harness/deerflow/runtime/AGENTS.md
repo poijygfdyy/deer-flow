@@ -53,6 +53,8 @@ Checkpointer storage runs in one of two channel modes, selected by `checkpoint_c
 
 **Message sequence placement:** Keep backend and frontend message identity rules aligned. Details: `backend/docs/runtime-guidance-details.md`.
 
+**Run-event type filters:** `list_events(event_types=None)` requests all event types; an explicitly empty list matches none in every store backend (memory, JSONL, DB). Keep this distinction when changing SQL predicates.
+
 **Thread message cursors:** `list_messages` applies both exclusive bounds before `limit`, paging forward whenever `after_seq` is supplied.
 
 **Journal capture**: Image-only input stops batch scans and later human-event
