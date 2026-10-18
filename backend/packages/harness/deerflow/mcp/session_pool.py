@@ -124,14 +124,41 @@ def _is_mcp_transport_disconnect(error: Exception) -> bool:
     return isinstance(error, McpError) and error.error.code == CONNECTION_CLOSED and error.error.message == "Connection closed"
 
 
-async def _finish_session_cleanup(cleanup: asyncio.Task[Any], server_name: str) -> bool:
-    """Wait for cleanup despite cancellation and report whether it was requested."""
+async def _finish_session_cleanup(
+    cleanup: asyncio.Task[Any],
+    server_name: str,
+    pool: MCPSessionPool,
+) -> bool:
+    """Wait for disconnect cleanup, detaching it if it exceeds the close deadline."""
     cancelled = False
+    timeout = getattr(type(pool), "SESSION_CLOSE_TIMEOUT", 5.0)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.0, timeout)
     while not cleanup.done():
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            if not cleanup.done():
+                pool._track_owner_teardown(cleanup)
+                logger.warning(
+                    "Timed out closing disconnected MCP session for server '%s' after %.1f seconds; teardown remains tracked in background",
+                    server_name,
+                    timeout,
+                )
+                return cancelled
+            break
         try:
-            await asyncio.shield(cleanup)
+            await asyncio.wait_for(asyncio.shield(cleanup), timeout=remaining)
         except asyncio.CancelledError:
             cancelled = True
+        except asyncio.TimeoutError:
+            if not cleanup.done():
+                pool._track_owner_teardown(cleanup)
+                logger.warning(
+                    "Timed out closing disconnected MCP session for server '%s' after %.1f seconds; teardown remains tracked in background",
+                    server_name,
+                    timeout,
+                )
+                return cancelled
         except Exception:
             logger.warning(
                 "Failed to close disconnected MCP session for server '%s'",
@@ -175,7 +202,7 @@ async def call_pooled_session_tool(
             if _is_mcp_transport_disconnect(error):
                 cleanup_call = pool.close_session_if_current(server_name, scope_key, session) if domain == "deployment" else pool.close_session_if_current(server_name, scope_key, session, domain=domain)
                 cleanup = asyncio.create_task(cleanup_call)
-                if await _finish_session_cleanup(cleanup, server_name):
+                if await _finish_session_cleanup(cleanup, server_name, pool):
                     raise asyncio.CancelledError
             raise
 
@@ -184,7 +211,7 @@ class MCPSessionPool:
     """Manages persistent MCP sessions scoped by ``(server_name, scope_key, owning_loop, ownership_domain)``."""
 
     MAX_SESSIONS = 256
-    SESSION_CLOSE_TIMEOUT = 5.0  # seconds to wait when closing a session on a foreign loop
+    SESSION_CLOSE_TIMEOUT = 5.0  # disconnect wait bound; also bounds synchronous waits on a foreign loop
 
     def __init__(self) -> None:
         # Each entry: (session, owning_loop, owner_task, close_event).
