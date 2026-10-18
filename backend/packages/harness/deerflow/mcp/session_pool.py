@@ -140,7 +140,10 @@ async def _finish_session_cleanup(
             if not cleanup.done():
                 pool._track_owner_teardown(cleanup)
                 logger.warning(
-                    "Timed out closing disconnected MCP session for server '%s' after %.1f seconds; teardown remains tracked in background",
+                    (
+                        "Timed out closing disconnected MCP session for server '%s' after "
+                        "%.1f seconds; teardown remains tracked in background"
+                    ),
                     server_name,
                     timeout,
                 )
@@ -154,7 +157,10 @@ async def _finish_session_cleanup(
             if not cleanup.done():
                 pool._track_owner_teardown(cleanup)
                 logger.warning(
-                    "Timed out closing disconnected MCP session for server '%s' after %.1f seconds; teardown remains tracked in background",
+                    (
+                        "Timed out closing disconnected MCP session for server '%s' after "
+                        "%.1f seconds; teardown remains tracked in background"
+                    ),
                     server_name,
                     timeout,
                 )
