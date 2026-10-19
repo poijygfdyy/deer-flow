@@ -412,3 +412,43 @@ class TestGenerator:
 
 async def _fake_model(text: str, metadata: dict | None = None) -> OneshotLLMResult:
     return _result(text, metadata)
+
+async def test_stop_drains_workers_before_propagating_cancellation(repos, text_file, monkeypatch):
+    sf, projects, docs = repos
+    await _shelf_row(projects, docs)
+    _patch_source(monkeypatch, (text_file, None))
+    blocker = asyncio.Event()
+    model_started = asyncio.Event()
+
+    async def blocking_model(**kwargs):
+        model_started.set()
+        await blocker.wait()
+        return _result("finished before shutdown")
+
+    monkeypatch.setattr(summaries, "run_oneshot_llm_detailed", blocking_model)
+    generator = SummaryGenerator(
+        session_factory=sf,
+        paths=None,
+        app_config=_app_config(summary_concurrency=1),
+    )
+    await generator.start()
+    row = await docs.get("doc-1", user_id="u1")
+    assert generator.enqueue(
+        document_id="doc-1", project_id=row["project_id"], user_id="u1"
+    ) is True
+    await model_started.wait()
+
+    stop_task = asyncio.create_task(generator.stop())
+    while generator._stop_task is None:
+        await asyncio.sleep(0)
+    stop_task.cancel()
+    await asyncio.sleep(0)
+    assert not stop_task.done()
+
+    blocker.set()
+    with pytest.raises(asyncio.CancelledError):
+        await stop_task
+
+    assert generator._workers == []
+    assert (await docs.get("doc-1", user_id="u1"))["summary"] == "finished before shutdown"
+
