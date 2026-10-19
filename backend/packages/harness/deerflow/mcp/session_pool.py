@@ -210,7 +210,7 @@ class MCPSessionPool:
     """Manages persistent MCP sessions scoped by ``(server_name, scope_key, owning_loop, ownership_domain)``."""
 
     MAX_SESSIONS = 256
-    SESSION_CLOSE_TIMEOUT = _MCP_DISCONNECT_CLEANUP_TIMEOUT_SECONDS  # bounded MCP teardown wait
+    SESSION_CLOSE_TIMEOUT = _MCP_DISCONNECT_CLEANUP_TIMEOUT_SECONDS  # disconnect + synchronous foreign-loop close bound
 
     def __init__(self) -> None:
         # Each entry: (session, owning_loop, owner_task, close_event).
