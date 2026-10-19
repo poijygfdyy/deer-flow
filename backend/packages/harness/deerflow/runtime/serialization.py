@@ -26,13 +26,17 @@ def serialize_lc_object(obj: Any) -> Any:
     # Pydantic v2
     if hasattr(obj, "model_dump"):
         try:
-            return obj.model_dump()
+            dumped = obj.model_dump()
+            if dumped is not obj:
+                return serialize_lc_object(dumped)
         except Exception:
             pass
     # Pydantic v1 / older objects
     if hasattr(obj, "dict"):
         try:
-            return obj.dict()
+            dumped = obj.dict()
+            if dumped is not obj:
+                return serialize_lc_object(dumped)
         except Exception:
             pass
     # Interrupt is a __slots__ class — no model_dump/dict/__dict__, so it

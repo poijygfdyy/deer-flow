@@ -17,6 +17,20 @@ class _FakePydanticV1:
         return {"key": "v1"}
 
 
+class _NestedPydanticV2:
+    """A Pydantic-like object whose dump contains other opaque objects."""
+
+    def model_dump(self):
+        return {"v1": _FakePydanticV1(), "v2": [_FakePydanticV2()]}
+
+
+class _NestedPydanticV1:
+    """A Pydantic-v1-like object whose dict contains another model."""
+
+    def dict(self):
+        return {"nested": _FakePydanticV2()}
+
+
 class _Unprintable:
     """Object whose str() raises."""
 
@@ -74,6 +88,23 @@ def test_serialize_pydantic_v1():
     from deerflow.runtime.serialization import serialize_lc_object
 
     assert serialize_lc_object(_FakePydanticV1()) == {"key": "v1"}
+
+
+def test_serialize_pydantic_dump_recurses_into_nested_values():
+    import json
+
+    from deerflow.runtime.serialization import serialize_lc_object
+
+    result = serialize_lc_object(_NestedPydanticV2())
+
+    assert result == {"v1": {"key": "v1"}, "v2": [{"key": "v2"}]}
+    json.dumps(result)
+
+
+def test_serialize_pydantic_v1_dict_recurses_into_nested_values():
+    from deerflow.runtime.serialization import serialize_lc_object
+
+    assert serialize_lc_object(_NestedPydanticV1()) == {"nested": {"key": "v2"}}
 
 
 def test_serialize_fallback_str():
