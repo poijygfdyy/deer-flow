@@ -1924,3 +1924,53 @@ class TestStampMessagesWithSeq:
         messages = [{"type": "human", "id": "u1", "content": "hi"}]
 
         assert await stamp_messages_with_seq(_Broken(), "t1", messages) == messages
+
+
+class TestMemorySnapshotIsolation:
+    @pytest.mark.anyio
+    async def test_put_snapshots_inputs_and_returns_detached_record(self, store):
+        content = {"nested": {"items": ["original"]}}
+        metadata = {"labels": ["original"]}
+
+        returned = await store.put(
+            thread_id="t-snapshot",
+            run_id="r1",
+            event_type="trace",
+            category="trace",
+            content=content,
+            metadata=metadata,
+        )
+
+        content["nested"]["items"].append("mutated-input")
+        metadata["labels"].append("mutated-input")
+        returned["content"]["nested"]["items"].append("mutated-return")
+        returned["metadata"]["labels"].append("mutated-return")
+
+        stored = await store.list_events("t-snapshot", "r1")
+        assert stored[0]["content"] == {"nested": {"items": ["original"]}}
+        assert stored[0]["metadata"] == {"labels": ["original"]}
+
+    @pytest.mark.anyio
+    async def test_query_results_are_detached_from_stored_events(self, store):
+        await store.put(
+            thread_id="t-snapshot",
+            run_id="r1",
+            event_type="llm.ai.response",
+            category="message",
+            content={"nested": {"items": ["original"]}},
+            metadata={"labels": ["original"]},
+        )
+
+        by_events = await store.list_events("t-snapshot", "r1")
+        by_events[0]["content"]["nested"]["items"].append("mutated-events")
+        by_events[0]["metadata"]["labels"].append("mutated-events")
+
+        by_messages = await store.list_messages("t-snapshot")
+        by_messages[0]["content"]["nested"]["items"].append("mutated-messages")
+
+        by_run = await store.list_messages_by_run("t-snapshot", "r1")
+        by_run[0]["content"]["nested"]["items"].append("mutated-run")
+
+        stored = await store.list_events("t-snapshot", "r1")
+        assert stored[0]["content"] == {"nested": {"items": ["original"]}}
+        assert stored[0]["metadata"] == {"labels": ["original"]}
