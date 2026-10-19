@@ -163,6 +163,7 @@ class SummaryGenerator:
         self._queue: asyncio.Queue[tuple[str, str, str] | None] = asyncio.Queue(maxsize=pcfg.summary_queue_size)
         self._workers: list[asyncio.Task] = []
         self._stopping = False
+        self._stop_task: asyncio.Task[None] | None = None
         self._metrics: dict[str, int] = {key: 0 for key in _METRIC_KEYS}
 
     @property
@@ -195,15 +196,49 @@ class SummaryGenerator:
             return False
 
     async def stop(self) -> None:
-        """Stop admitting, discard queued jobs, let idle workers exit, drain the rest.
+        """Drain the owned shutdown task before propagating caller cancellation.
 
-        Queued-but-unstarted jobs are dropped (counted ``queue_dropped``).
-        One sentinel per worker then wakes every idle loop so an empty queue
-        shuts down immediately instead of waiting out the grace period; the
-        grace bounds only genuinely in-flight jobs. A cancelled job drains
-        its conversion worker per ``await_drained`` semantics,
-        so shutdown may exceed the grace period while a conversion finishes.
+        Shutdown can outlive the grace period while a conversion finishes. Keep
+        that cleanup owned and observable even if the lifespan task is cancelled;
+        a later stop call can then observe the same completed shutdown.
         """
+        if self._stop_task is None:
+            self._stop_task = asyncio.create_task(self._stop_impl(), name="summary-generator-stop")
+        stop_task = self._stop_task
+        current = asyncio.current_task()
+        initial_cancellations = current.cancelling() if current is not None else 0
+        cancellation: asyncio.CancelledError | None = None
+
+        while True:
+            try:
+                await asyncio.shield(stop_task)
+                break
+            except asyncio.CancelledError as exc:
+                current = asyncio.current_task()
+                if current is None or current.cancelling() <= initial_cancellations:
+                    raise
+                if cancellation is None:
+                    cancellation = exc
+                if stop_task.done():
+                    break
+            except Exception:
+                break
+
+        # A cancellation can be requested just as the owned task completes, in
+        # which case awaiting an already-done task may not suspend to deliver it.
+        current = asyncio.current_task()
+        if cancellation is None and current is not None and current.cancelling() > initial_cancellations:
+            cancellation = asyncio.CancelledError()
+        if cancellation is not None:
+            try:
+                stop_task.result()
+            except BaseException as error:
+                raise cancellation from error
+            raise cancellation
+        stop_task.result()
+
+    async def _stop_impl(self) -> None:
+        """Perform the one shutdown sequence shared by all stop callers."""
         self._stopping = True
         while True:
             try:
