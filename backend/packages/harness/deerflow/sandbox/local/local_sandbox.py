@@ -955,17 +955,16 @@ class LocalSandbox(Sandbox):
 
         stdout_capture, stdout_thread = LocalSandbox._start_pipe_drain(stdout_read_fd, "deerflow-bash-stdout-drain")
         stderr_capture, stderr_thread = LocalSandbox._start_pipe_drain(stderr_read_fd, "deerflow-bash-stderr-drain")
-        try:
-            process_group_id = os.getpgid(process.pid)
-        except OSError:
-            process_group_id = None
+        # `start_new_session=True` makes the child PID its process-group ID.
+        # Capture it without a post-spawn lookup that can race with a fast exit.
+        process_group_id = process.pid
 
         try:
             try:
                 process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 timed_out = True
-                LocalSandbox._terminate_process_group(process)
+                LocalSandbox._terminate_process_group(process, process_group_id)
             returncode = process.returncode if process.returncode is not None else 0
         finally:
             join_timeout = 10 if timed_out or not LocalSandbox._process_group_exists(process_group_id) else _PIPE_DRAIN_JOIN_TIMEOUT_SECONDS
@@ -979,14 +978,17 @@ class LocalSandbox(Sandbox):
         return stdout, stderr, returncode, timed_out
 
     @staticmethod
-    def _terminate_process_group(process: subprocess.Popen) -> None:
-        """Kill the command's whole process group, then reap it.
+    def _terminate_process_group(process: subprocess.Popen, process_group_id: int) -> None:
+        """Kill the process group captured at spawn, then reap the direct child.
 
-        Falls back to killing just the direct child if the group is already
-        gone (e.g. the command exited between the timeout and this call).
+        `start_new_session=True` makes the child's PID its initial process-group
+        ID. Re-resolving it through `os.getpgid(process.pid)` after a timeout
+        races with the leader exiting while descendants still hold the group:
+        `getpgid` then fails and killing only the direct child leaves descendants
+        running.
         """
         try:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            os.killpg(process_group_id, signal.SIGKILL)
         except (ProcessLookupError, PermissionError, OSError):
             # The process group is already gone (the command exited in the race
             # between the timeout and this call); fall back to killing just the

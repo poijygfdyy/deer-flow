@@ -162,6 +162,32 @@ def test_foreground_timeout_kills_whole_process_group(tmp_path):
 
 
 @posix_only
+def test_timeout_uses_captured_process_group_after_leader_exits(monkeypatch):
+    """A vanished leader must not prevent killing descendants in its captured group."""
+    killed = []
+
+    class ExitedLeader:
+        pid = 4242
+        returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pytest.fail("should not fall back to killing only the exited leader")
+
+    def unexpected_group_lookup(_pid):
+        pytest.fail("the process group must not be re-resolved through an exited PID")
+
+    monkeypatch.setattr(local_sandbox.os, "killpg", lambda pgid, sig: killed.append((pgid, sig)))
+    monkeypatch.setattr(local_sandbox.os, "getpgid", unexpected_group_lookup)
+
+    LocalSandbox._terminate_process_group(ExitedLeader(), 4242)
+
+    assert killed == [(4242, local_sandbox.signal.SIGKILL)]
+
+
+@posix_only
 def test_command_reading_stdin_does_not_block():
     """stdin is redirected from /dev/null, so a command that reads stdin gets
     immediate EOF instead of blocking until the timeout."""
