@@ -443,12 +443,15 @@ async def test_stop_drains_workers_before_propagating_cancellation(repos, text_f
         await asyncio.sleep(0)
     stop_task.cancel()
     await asyncio.sleep(0)
-    assert not stop_task.done()
+    stop_waited_for_cleanup = not stop_task.done()
 
+    # Always release the fake provider call, even when this assertion would
+    # fail on an implementation that abandons shutdown on cancellation.
     blocker.set()
     with pytest.raises(asyncio.CancelledError):
         await stop_task
 
+    assert stop_waited_for_cleanup
     assert generator._workers == []
     assert (await docs.get("doc-1", user_id="u1"))["summary"] == "finished before shutdown"
 
