@@ -38,10 +38,13 @@ class MemoryStreamBridge(StreamBridge):
         self._maxsize = max(1, queue_maxsize)
         self._streams: dict[str, _RunStream] = {}
         self._counters: dict[str, int] = {}
+        self._closed = False
 
     # -- helpers ---------------------------------------------------------------
 
     def _get_or_create_stream(self, run_id: str) -> _RunStream:
+        if self._closed:
+            raise RuntimeError("Stream bridge is closed")
         if run_id not in self._streams:
             self._streams[run_id] = _RunStream()
             self._counters[run_id] = 0
@@ -119,6 +122,8 @@ class MemoryStreamBridge(StreamBridge):
         stream = self._get_or_create_stream(run_id)
         entry = StreamEvent(id=self._next_id(run_id), event=event, data=data)
         async with stream.condition:
+            if self._closed:
+                raise RuntimeError("Stream bridge is closed")
             stream.events.append(entry)
             if len(stream.events) > self._maxsize:
                 overflow = len(stream.events) - self._maxsize
@@ -130,6 +135,8 @@ class MemoryStreamBridge(StreamBridge):
     async def publish_end(self, run_id: str) -> None:
         stream = self._get_or_create_stream(run_id)
         async with stream.condition:
+            if self._closed:
+                raise RuntimeError("Stream bridge is closed")
             stream.ended = True
             stream.condition.notify_all()
 
@@ -143,6 +150,8 @@ class MemoryStreamBridge(StreamBridge):
         heartbeat_interval = self._resolve_heartbeat_interval(heartbeat_interval)
         stream = self._get_or_create_stream(run_id)
         async with stream.condition:
+            if self._closed:
+                raise RuntimeError("Stream bridge is closed")
             start = self._resolve_start_offset(stream, last_event_id)
             if isinstance(start, StreamGap):
                 gap = start
@@ -214,5 +223,8 @@ class MemoryStreamBridge(StreamBridge):
             stream.condition.notify_all()
 
     async def close(self) -> None:
+        # Reject new work before draining streams. Do not short-circuit repeat
+        # calls: a previous close may have been cancelled partway through.
+        self._closed = True
         for run_id in tuple(self._streams):
             await self.cleanup(run_id)

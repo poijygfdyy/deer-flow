@@ -24,6 +24,10 @@ readers never attach to a recreated stream. An unpublished stream without explic
 cleanup still heartbeats.
 New readers that capture a generation but acquire its Condition only after
 retirement always receive a gap, including cursor-less terminal reattachments.
+Both bridge implementations reject new `publish`, `publish_end`, and
+`subscribe` operations once shutdown begins. Keep close idempotent and retryable
+after cancellation; a post-close call must not recreate an in-memory stream or
+start a Redis subscription through a borrowed client.
 
 Memory/Redis bridges keep startup-only `stream_bridge.heartbeat_interval_seconds`; explicit `subscribe(..., heartbeat_interval=...)` overrides it. Provider contexts drain owned cache/bridge/checkpointer/Store teardown across cancellation. `close_agent_stream()` shields close to completion: preserve counts, defer host cancellation, balance repeats, keep active errors, log attached close failures at callers, map close cancellation to failure, never time out.
 
