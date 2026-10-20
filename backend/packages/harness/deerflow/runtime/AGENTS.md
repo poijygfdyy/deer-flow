@@ -393,3 +393,8 @@ unknown or cancelled write outcomes cannot yield a receipt or be replayed. Only
 proven-not-committed batches may be retried. Normal close stops new evidence
 producers and drains already admitted cross-thread callbacks inside its operation
 lock before flushing and detaching; do not reacquire that lock through `flush()`.
+
+
+## StreamBridge payload ownership
+
+The in-memory bridge must match Redis replay semantics: snapshot JSON-compatible event data at publish time, then give each subscriber an independent payload copy. Never expose a mutable object owned by the retained replay buffer, because producer or subscriber mutation must not rewrite history for other readers.
