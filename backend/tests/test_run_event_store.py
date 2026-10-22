@@ -371,6 +371,30 @@ class TestListEvents:
         assert events[0]["event_type"] == "llm_end"
 
     @pytest.mark.anyio
+    @pytest.mark.parametrize("backend", ["memory", "jsonl", "db"])
+    async def test_empty_event_types_is_an_empty_filter_across_backends(self, tmp_path, backend):
+        """None means no filter; an explicit empty list must match no event."""
+        from deerflow.persistence.engine import close_engine, get_session_factory, init_engine
+        from deerflow.runtime.events.store.db import DbRunEventStore
+        from deerflow.runtime.events.store.jsonl import JsonlRunEventStore
+
+        if backend == "db":
+            await init_engine("sqlite", url=f"sqlite+aiosqlite:///{tmp_path / 'test.db'}", sqlite_dir=str(tmp_path))
+            event_store = DbRunEventStore(get_session_factory())
+        elif backend == "jsonl":
+            event_store = JsonlRunEventStore(base_dir=tmp_path / "jsonl")
+        else:
+            event_store = MemoryRunEventStore()
+
+        try:
+            await event_store.put(thread_id="t1", run_id="r1", event_type="llm_end", category="trace")
+            assert len(await event_store.list_events("t1", "r1", event_types=None, user_id=None)) == 1
+            assert await event_store.list_events("t1", "r1", event_types=[], limit=1, user_id=None) == []
+        finally:
+            if backend == "db":
+                await close_engine()
+
+    @pytest.mark.anyio
     async def test_only_returns_specified_run(self, store):
         await store.put(thread_id="t1", run_id="r1", event_type="llm_end", category="trace")
         await store.put(thread_id="t1", run_id="r2", event_type="llm_end", category="trace")
