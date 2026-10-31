@@ -15,7 +15,9 @@ saver read and publish only if it is unchanged. Thread deletion, prune, and
 explicit invalidation advance that generation before purging. Memory checks
 under its LRU lock; Redis uses a shared epoch key and atomic Lua compare-and-write,
 so a fill started before deletion cannot repopulate the cache across workers.
-The epoch key must stay outside every thread SCAN stem. Escape literal stems for
+If Redis cannot read/initialize the epoch, bypass cached reads and fills and use
+the source saver; never trust cached hits without a fence. The epoch key must
+stay outside every thread SCAN stem. Escape literal stems for
 SCAN; recheck byte/string keys before UNLINK. Preserve namespace/thread bounds,
 cursor iteration and outage/TTL fallback.
 

@@ -8,7 +8,8 @@ thread deletion or prune: each namespace therefore has a generation captured
 before source reads, and a fill may publish only while that generation is still
 current. Thread-scoped deletion advances the generation before purging entries.
 Redis shares this fence across workers with an atomic compare-and-write; the
-memory backend checks it under the LRU lock.
+memory backend checks it under the LRU lock. If a backend cannot provide a
+trustworthy generation, callers must bypass cached reads and fills entirely.
 
 The delete API is thread-scoped (``adelete_thread``/``delete_thread``) and
 exists for data lifecycle: when source checkpoints are erased (thread deletion,

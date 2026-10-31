@@ -13,6 +13,8 @@ ancestor's writes are sealed once its child exists. Entries keyed by
 A read-through fill can still race with thread deletion/prune, so the wrapper
 captures the cache namespace generation before its first source read and
 publishes every target/ancestor fill only if that generation is unchanged.
+If the backend cannot supply a trustworthy generation, the wrapper bypasses
+cached hits and walks the authoritative saver directly.
 
 The wrapper never caches the "latest checkpoint" resolution; only histories
 keyed by resolved immutable checkpoint_ids.
