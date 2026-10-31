@@ -141,7 +141,10 @@ class RedisCheckpointHistoryCache:
                     try:
                         token = raw.decode() if isinstance(raw, bytes) else str(raw)
                     except UnicodeDecodeError:
-                        _warn("checkpoint history cache generation token is malformed; skipping cache fill")
+                        _warn(
+                            "checkpoint history cache generation token is malformed; "
+                            "skipping cache fill"
+                        )
                         return None
                     return token or None
                 candidate = secrets.token_hex(16)
