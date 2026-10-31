@@ -68,12 +68,12 @@ class MemoryCheckpointHistoryCache:
     def set_many_if_generation(
         self,
         key_prefix: str,
-        generation: int | str | None,
+        generation: int | None,
         entries: dict[str, dict[str, Any]],
     ) -> bool:
         if not entries:
             return True
-        if not self.enabled or not isinstance(generation, int):
+        if not self.enabled or generation is None:
             return False
         copied = {key: _copy_entry(entry) for key, entry in entries.items()}
         with self._lock:
@@ -94,7 +94,7 @@ class MemoryCheckpointHistoryCache:
     async def aset_many_if_generation(
         self,
         key_prefix: str,
-        generation: int | str | None,
+        generation: int | None,
         entries: dict[str, dict[str, Any]],
     ) -> bool:
         return self.set_many_if_generation(key_prefix, generation, entries)

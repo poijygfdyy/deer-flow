@@ -155,7 +155,7 @@ class CachedHistorySaver(BaseCheckpointSaver):
         config: RunnableConfig,
         target: CheckpointTuple,
         missing: list[str],
-        generation: int | str | None,
+        generation: int | None,
     ) -> dict[str, dict[str, Any]]:
         return {
             ch: await self._aresolve(target, ch, _COMPOSE_MAX_DEPTH, generation)
@@ -167,7 +167,7 @@ class CachedHistorySaver(BaseCheckpointSaver):
         tup: CheckpointTuple,
         channel: str,
         depth: int,
-        generation: int | str | None,
+        generation: int | None,
     ) -> dict[str, Any]:
         """Recursively compose history(tup) from the nearest warm ancestor.
 

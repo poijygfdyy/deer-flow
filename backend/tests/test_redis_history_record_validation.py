@@ -28,20 +28,16 @@ class RedisTransport:
     async def get(self, key):
         return self.values.get(key)
 
-    async def setnx(self, key, value):
-        if key in self.values:
-            return False
-        self.values[key] = value.encode()
-        return True
+    async def incr(self, key):
+        value = int(self.values.get(key, b"0")) + 1
+        self.values[key] = str(value).encode()
+        return value
 
     async def eval(self, script, numkeys, *args):
         assert numkeys == 1
-        key = args[0]
-        if "redis.call('SET', KEYS[1], ARGV[1])" in script:
-            self.values[key] = str(args[1]).encode()
-            return b"OK"
-        expected = str(args[1])
-        if self.values.get(key, b"").decode() != expected:
+        epoch_key, expected, ttl = args[:3]
+        current = self.values.get(epoch_key, b"0").decode()
+        if current != str(expected):
             return 0
         for index in range(3, len(args), 2):
             self.values[args[index]] = args[index + 1]

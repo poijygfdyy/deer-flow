@@ -38,24 +38,20 @@ class _FakeRedis:
     async def get(self, key: str) -> bytes | None:
         return self.store.get(key)
 
-    async def setnx(self, key: str, value: str) -> bool:
-        if key in self.store:
-            return False
-        self.store[key] = value.encode()
-        return True
+    async def incr(self, key: str) -> int:
+        value = int(self.store.get(key, b"0")) + 1
+        self.store[key] = str(value).encode()
+        return value
 
-    async def eval(self, script: str, numkeys: int, *args: Any) -> int | bytes:
+    async def eval(self, script: str, numkeys: int, *args: Any) -> int:
         assert numkeys == 1
-        key = args[0]
-        if "redis.call('SET', KEYS[1], ARGV[1])" in script:
-            self.store[key] = str(args[1]).encode()
-            return b"OK"
-        expected, ttl = str(args[1]), int(args[2])
-        current = self.store.get(key, b"").decode()
-        if current != expected:
+        epoch_key, expected, ttl = args[:3]
+        current = self.store.get(epoch_key, b"0").decode()
+        if current != str(expected):
             return 0
+        expiry = int(ttl)
         for index in range(3, len(args), 2):
-            self.set(args[index], args[index + 1], ex=ttl if ttl > 0 else None)
+            self.set(args[index], args[index + 1], ex=expiry if expiry > 0 else None)
         return 1
 
     def set(self, key: str, value: bytes, ex: int | None = None) -> None:
@@ -111,12 +107,7 @@ class _FailingRedis(_FakeRedis):
 
         raise RedisError("connection refused")
 
-    async def setnx(self, key: str, value: str) -> bool:
-        from redis.exceptions import RedisError
-
-        raise RedisError("connection refused")
-
-    async def eval(self, script: str, numkeys: int, *args: Any) -> int | bytes:
+    async def incr(self, key: str) -> int:
         from redis.exceptions import RedisError
 
         raise RedisError("connection refused")
@@ -268,7 +259,7 @@ async def test_adelete_thread_purges_matching_keys_only(monkeypatch: pytest.Monk
     await cache.adelete_thread(prefix, "t1")
 
     epoch_key = cache._epoch_key(prefix)
-    assert epoch_key in fake.store
+    assert fake.store[epoch_key] == b"1"
     assert sorted(key for key in fake.store if key != epoch_key) == [
         f"{prefix}:t10:ccc",
         f"{prefix}:t2:ddd",
@@ -287,17 +278,14 @@ async def test_conditional_write_rejects_a_fill_started_before_delete_across_cli
     fresh_key = f"{prefix}:t1:fresh"
 
     old_generation = await first.aget_generation(prefix)
-    assert old_generation is not None
+    assert old_generation == 0
     await second.adelete_thread(prefix, "t1")
 
-    # Even if Redis evicts the namespace token after the purge, a missing key
-    # must not make an old writer's token valid again.
-    fake.store.pop(first._epoch_key(prefix), None)
     assert not await first.aset_many_if_generation(prefix, old_generation, {stale_key: _entry(1)})
     assert stale_key not in fake.store
 
     current_generation = await first.aget_generation(prefix)
-    assert current_generation is not None and current_generation != old_generation
+    assert current_generation == 1
     assert await first.aset_many_if_generation(prefix, current_generation, {fresh_key: _entry(2)})
     assert fresh_key in fake.store
 

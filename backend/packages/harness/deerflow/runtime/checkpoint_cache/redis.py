@@ -231,8 +231,13 @@ class RedisCheckpointHistoryCache:
                 secrets.token_hex(16),
             )
         except _redis_error() as exc:
-            _warn("checkpoint history cache thread purge failed; generation fence unavailable: %s", exc)
-            return
+            # Keep the legacy best-effort purge even if the fence command is
+            # unavailable; in-flight fills may still survive this exceptional path.
+            _warn(
+                "checkpoint history cache thread purge failed; generation fence unavailable, "
+                "continuing best-effort purge: %s",
+                exc,
+            )
         stem = thread_key_stem(key_prefix, thread_id)
         # The configured namespace is a literal key prefix, not a Redis glob.
         pattern = "".join("\\" + char if char in "\\*?[]" else char for char in stem) + "*"
@@ -249,7 +254,7 @@ class RedisCheckpointHistoryCache:
                 if cursor == 0:
                     break
         except _redis_error() as exc:
-            _warn("checkpoint history cache thread purge failed; residual entries expire via TTL: %s", exc)
+            _warn("checkpoint history cache thread purge failed; residual entries follow TTL/eviction policy: %s", exc)
 
     def stats(self) -> CheckpointCacheStats:
         return CheckpointCacheStats(
