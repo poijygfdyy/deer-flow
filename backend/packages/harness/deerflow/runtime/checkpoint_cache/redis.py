@@ -138,7 +138,12 @@ class RedisCheckpointHistoryCache:
             for _ in range(3):
                 raw = await self._client.get(epoch_key)
                 if raw is not None:
-                    return raw.decode() if isinstance(raw, bytes) else str(raw)
+                    try:
+                        token = raw.decode() if isinstance(raw, bytes) else str(raw)
+                    except UnicodeDecodeError:
+                        _warn("checkpoint history cache generation token is malformed; skipping cache fill")
+                        return None
+                    return token or None
                 candidate = secrets.token_hex(16)
                 if await self._client.setnx(epoch_key, candidate):
                     return candidate
