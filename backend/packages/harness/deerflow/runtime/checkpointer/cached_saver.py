@@ -9,8 +9,10 @@ Correctness argument (spec §3): a checkpoint's delta history is a pure
 function of its sealed ancestor chain — the LangGraph contract excludes the
 target's own pending writes, parent links are fixed at creation, and an
 ancestor's writes are sealed once its child exists. Entries keyed by
-(thread, ns, checkpoint_id, channel) are therefore immutable: no
-invalidation, and shared backends are coherent across processes.
+(thread, ns, checkpoint_id, channel) are therefore immutable once published.
+A read-through fill can still race with thread deletion/prune, so the wrapper
+captures the cache namespace generation before its first source read and
+publishes every target/ancestor fill only if that generation is unchanged.
 
 The wrapper never caches the "latest checkpoint" resolution; only histories
 keyed by resolved immutable checkpoint_ids.
@@ -122,6 +124,7 @@ class CachedHistorySaver(BaseCheckpointSaver):
             # Disabled cache: pass straight through; composing over all-miss
             # entries is strictly more work than the raw saver's walk.
             return await self._walk_inner(config, channels)
+        generation = await self._cache.aget_generation(self._key_prefix)
         target = await self._inner.aget_tuple(config)
         if target is None:
             return await self._walk_inner(config, channels)
@@ -139,18 +142,33 @@ class CachedHistorySaver(BaseCheckpointSaver):
 
         computed: dict[str, dict[str, Any]] = {}
         if missing:
-            computed = await self._compose_or_walk(config, target, missing)
+            computed = await self._compose_or_walk(config, target, missing, generation)
 
         new_entries = {keys[ch]: computed[ch] for ch in missing if ch in computed}
         if new_entries:
-            await self._cache.aset_many(new_entries)
+            await self._cache.aset_many_if_generation(self._key_prefix, generation, new_entries)
 
         return {ch: found.get(ch) or computed.get(ch) or {"writes": []} for ch in channels}
 
-    async def _compose_or_walk(self, config: RunnableConfig, target: CheckpointTuple, missing: list[str]) -> dict[str, dict[str, Any]]:
-        return {ch: await self._aresolve(target, ch, _COMPOSE_MAX_DEPTH) for ch in missing}
+    async def _compose_or_walk(
+        self,
+        config: RunnableConfig,
+        target: CheckpointTuple,
+        missing: list[str],
+        generation: int | str | None,
+    ) -> dict[str, dict[str, Any]]:
+        return {
+            ch: await self._aresolve(target, ch, _COMPOSE_MAX_DEPTH, generation)
+            for ch in missing
+        }
 
-    async def _aresolve(self, tup: CheckpointTuple, channel: str, depth: int) -> dict[str, Any]:
+    async def _aresolve(
+        self,
+        tup: CheckpointTuple,
+        channel: str,
+        depth: int,
+        generation: int | str | None,
+    ) -> dict[str, Any]:
         """Recursively compose history(tup) from the nearest warm ancestor.
 
         Real runs create several checkpoints per super-step and only some are
@@ -180,7 +198,7 @@ class CachedHistorySaver(BaseCheckpointSaver):
         parent_history = hits.get(key)
         if not valid_history_entry(parent_history, channel=channel):
             if depth > 0:
-                parent_history = await self._aresolve(parent, channel, depth - 1)
+                parent_history = await self._aresolve(parent, channel, depth - 1, generation)
             else:
                 # Depth budget exhausted on a cold chain: delegate ONE inner
                 # fast-path walk (2 SQL total) for this level instead of
@@ -191,7 +209,11 @@ class CachedHistorySaver(BaseCheckpointSaver):
                 walked = await self._inner.aget_delta_channel_history(config=parent.config, channels=[channel])
                 parent_history = walked.get(channel) or {"writes": []}
             if parent_history is not None:
-                await self._cache.aset_many({key: parent_history})
+                await self._cache.aset_many_if_generation(
+                    self._key_prefix,
+                    generation,
+                    {key: parent_history},
+                )
 
         self._compose_hits += 1
         entry: dict[str, Any] = {"writes": list(parent_history["writes"]) + writes}
@@ -212,6 +234,7 @@ class CachedHistorySaver(BaseCheckpointSaver):
         set_many = getattr(self._cache, "set_many", None)
         if get_many is None or set_many is None:
             raise TypeError("sync get_delta_channel_history requires a SyncCheckpointHistoryCache (memory backend)")
+        generation = self._cache.get_generation(self._key_prefix)
         target = self._inner.get_tuple(config)
         if target is None:
             return self._walk_inner_sync(config, channels)
@@ -229,14 +252,23 @@ class CachedHistorySaver(BaseCheckpointSaver):
 
         computed: dict[str, dict[str, Any]] = {}
         if missing:
-            computed = {ch: self._resolve_sync(target, ch, _COMPOSE_MAX_DEPTH) for ch in missing}
+            computed = {
+                ch: self._resolve_sync(target, ch, _COMPOSE_MAX_DEPTH, generation)
+                for ch in missing
+            }
 
         new_entries = {keys[ch]: computed[ch] for ch in missing if ch in computed}
         if new_entries:
-            set_many(new_entries)
+            self._cache.set_many_if_generation(self._key_prefix, generation, new_entries)
         return {ch: found.get(ch) or computed.get(ch) or {"writes": []} for ch in channels}
 
-    def _resolve_sync(self, tup: CheckpointTuple, channel: str, depth: int) -> dict[str, Any]:
+    def _resolve_sync(
+        self,
+        tup: CheckpointTuple,
+        channel: str,
+        depth: int,
+        generation: int,
+    ) -> dict[str, Any]:
         """Sync twin of _aresolve (recursive compose, see its docstring)."""
         parent_config = tup.parent_config
         if parent_config is None:
@@ -255,13 +287,17 @@ class CachedHistorySaver(BaseCheckpointSaver):
         parent_history = self._cache.get_many([key]).get(key)
         if not valid_history_entry(parent_history, channel=channel):
             if depth > 0:
-                parent_history = self._resolve_sync(parent, channel, depth - 1)
+                parent_history = self._resolve_sync(parent, channel, depth - 1, generation)
             else:
                 # See _aresolve: one inner fast-path walk, no per-tuple crawl.
                 self._full_walks += 1
                 parent_history = self._inner.get_delta_channel_history(config=parent.config, channels=[channel]).get(channel) or {"writes": []}
             if parent_history is not None:
-                self._cache.set_many({key: parent_history})
+                self._cache.set_many_if_generation(
+                    self._key_prefix,
+                    generation,
+                    {key: parent_history},
+                )
 
         self._compose_hits += 1
         entry: dict[str, Any] = {"writes": list(parent_history["writes"]) + writes}

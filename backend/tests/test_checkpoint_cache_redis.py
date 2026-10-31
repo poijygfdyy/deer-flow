@@ -35,6 +35,29 @@ class _FakeRedis:
     async def mget(self, keys: list[str]) -> list[bytes | None]:
         return [self.store.get(k) for k in keys]
 
+    async def get(self, key: str) -> bytes | None:
+        return self.store.get(key)
+
+    async def setnx(self, key: str, value: str) -> bool:
+        if key in self.store:
+            return False
+        self.store[key] = value.encode()
+        return True
+
+    async def eval(self, script: str, numkeys: int, *args: Any) -> int | bytes:
+        assert numkeys == 1
+        key = args[0]
+        if "redis.call('SET', KEYS[1], ARGV[1])" in script:
+            self.store[key] = str(args[1]).encode()
+            return b"OK"
+        expected, ttl = str(args[1]), int(args[2])
+        current = self.store.get(key, b"").decode()
+        if current != expected:
+            return 0
+        for index in range(3, len(args), 2):
+            self.set(args[index], args[index + 1], ex=ttl if ttl > 0 else None)
+        return 1
+
     def set(self, key: str, value: bytes, ex: int | None = None) -> None:
         self.store[key] = value
         self.ttls[key] = ex
@@ -79,6 +102,21 @@ class _FailingRedis(_FakeRedis):
     """Simulates a redis outage: every operation raises RedisError."""
 
     async def mget(self, keys: list[str]) -> list[bytes | None]:
+        from redis.exceptions import RedisError
+
+        raise RedisError("connection refused")
+
+    async def get(self, key: str) -> bytes | None:
+        from redis.exceptions import RedisError
+
+        raise RedisError("connection refused")
+
+    async def setnx(self, key: str, value: str) -> bool:
+        from redis.exceptions import RedisError
+
+        raise RedisError("connection refused")
+
+    async def eval(self, script: str, numkeys: int, *args: Any) -> int | bytes:
         from redis.exceptions import RedisError
 
         raise RedisError("connection refused")
@@ -229,8 +267,39 @@ async def test_adelete_thread_purges_matching_keys_only(monkeypatch: pytest.Monk
 
     await cache.adelete_thread(prefix, "t1")
 
-    assert sorted(fake.store) == [f"{prefix}:t10:ccc", f"{prefix}:t2:ddd"]
+    epoch_key = cache._epoch_key(prefix)
+    assert epoch_key in fake.store
+    assert sorted(key for key in fake.store if key != epoch_key) == [
+        f"{prefix}:t10:ccc",
+        f"{prefix}:t2:ddd",
+    ]
     assert fake.unlinked  # UNLINK, not DEL: non-blocking on big histories
+
+
+
+@pytest.mark.anyio
+async def test_conditional_write_rejects_a_fill_started_before_delete_across_clients(monkeypatch: pytest.MonkeyPatch):
+    fake = _FakeRedis()
+    first = _make_cache(monkeypatch, fake)
+    second = _make_cache(monkeypatch, fake)
+    prefix = "ckpt-hist:v1:shared"
+    stale_key = f"{prefix}:t1:stale"
+    fresh_key = f"{prefix}:t1:fresh"
+
+    old_generation = await first.aget_generation(prefix)
+    assert old_generation is not None
+    await second.adelete_thread(prefix, "t1")
+
+    # Even if Redis evicts the namespace token after the purge, a missing key
+    # must not make an old writer's token valid again.
+    fake.store.pop(first._epoch_key(prefix), None)
+    assert not await first.aset_many_if_generation(prefix, old_generation, {stale_key: _entry(1)})
+    assert stale_key not in fake.store
+
+    current_generation = await first.aget_generation(prefix)
+    assert current_generation is not None and current_generation != old_generation
+    assert await first.aset_many_if_generation(prefix, current_generation, {fresh_key: _entry(2)})
+    assert fresh_key in fake.store
 
 
 @pytest.mark.anyio

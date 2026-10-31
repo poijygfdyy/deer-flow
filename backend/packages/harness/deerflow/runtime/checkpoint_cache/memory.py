@@ -22,6 +22,7 @@ class MemoryCheckpointHistoryCache:
         self._lock = threading.Lock()
         self._max_entries = max_entries
         self._data: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._generations: dict[str, int] = {}
         self._hits = 0
         self._misses = 0
         self._evictions = 0
@@ -45,17 +46,41 @@ class MemoryCheckpointHistoryCache:
         # outside the registry lock: user payloads can implement __deepcopy__.
         return {key: _copy_entry(entry) for key, entry in found.items()}
 
+    def get_generation(self, key_prefix: str) -> int:
+        with self._lock:
+            return self._generations.get(key_prefix, 0)
+
+    def _store_locked(self, copied: dict[str, dict[str, Any]]) -> None:
+        for key, entry in copied.items():
+            self._data[key] = entry
+            self._data.move_to_end(key)
+            while len(self._data) > self._max_entries:
+                self._data.popitem(last=False)
+                self._evictions += 1
+
     def set_many(self, entries: dict[str, dict[str, Any]]) -> None:
         if not self.enabled:
             return
         copied = {key: _copy_entry(entry) for key, entry in entries.items()}
         with self._lock:
-            for key, entry in copied.items():
-                self._data[key] = entry
-                self._data.move_to_end(key)
-                while len(self._data) > self._max_entries:
-                    self._data.popitem(last=False)
-                    self._evictions += 1
+            self._store_locked(copied)
+
+    def set_many_if_generation(
+        self,
+        key_prefix: str,
+        generation: int | str | None,
+        entries: dict[str, dict[str, Any]],
+    ) -> bool:
+        if not entries:
+            return True
+        if not self.enabled or not isinstance(generation, int):
+            return False
+        copied = {key: _copy_entry(entry) for key, entry in entries.items()}
+        with self._lock:
+            if self._generations.get(key_prefix, 0) != generation:
+                return False
+            self._store_locked(copied)
+            return True
 
     async def aget_many(self, keys: list[str]) -> dict[str, dict[str, Any]]:
         return self.get_many(keys)
@@ -63,9 +88,21 @@ class MemoryCheckpointHistoryCache:
     async def aset_many(self, entries: dict[str, dict[str, Any]]) -> None:
         self.set_many(entries)
 
+    async def aget_generation(self, key_prefix: str) -> int:
+        return self.get_generation(key_prefix)
+
+    async def aset_many_if_generation(
+        self,
+        key_prefix: str,
+        generation: int | str | None,
+        entries: dict[str, dict[str, Any]],
+    ) -> bool:
+        return self.set_many_if_generation(key_prefix, generation, entries)
+
     def delete_thread(self, key_prefix: str, thread_id: str) -> None:
-        """Purge every entry of one thread (lifecycle, not invalidation)."""
+        """Advance the namespace fence, then purge this thread's entries."""
         with self._lock:
+            self._generations[key_prefix] = self._generations.get(key_prefix, 0) + 1
             stem = thread_key_stem(key_prefix, thread_id)
             for key in [k for k in self._data if k.startswith(stem)]:
                 del self._data[key]

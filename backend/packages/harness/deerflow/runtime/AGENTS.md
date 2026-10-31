@@ -10,7 +10,13 @@ Redis read/write records require tuple/list triples and string task/channel IDs;
 skip bad ingests, rebuild bad reads. Bind sync/async target/ancestor hits to the
 requested channel; seeds/values stay opaque. Warnings are best-effort: handler
 errors preserve cache fallbacks and valid neighbors, including Redis outages/purge.
-Escape literal stems for SCAN; recheck byte/string keys before UNLINK. Preserve
+Read-through fills capture the namespace generation before the first source
+saver read and publish only if it is unchanged. Thread deletion, prune, and
+explicit invalidation advance that generation before purging. Memory checks
+under its LRU lock; Redis uses a shared epoch token and atomic Lua
+compare-and-write, so a fill started before deletion cannot repopulate the cache
+across workers. The epoch key must stay outside every thread SCAN stem. Escape
+literal stems for SCAN; recheck byte/string keys before UNLINK. Preserve
 namespace/thread bounds, cursor iteration and outage/TTL fallback.
 
 ### Run Admission

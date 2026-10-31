@@ -1,17 +1,19 @@
 """Cache backend contract for checkpoint delta-history entries.
 
 Entries are ``DeltaChannelHistory``-shaped dicts (``{"writes": [...], "seed"?}``)
-keyed by immutable (database, thread, namespace, checkpoint_id, channel)
-tuples. Checkpoint lineage is append-only and a checkpoint's history excludes
-its own pending writes, so entries never change once written: correctness
-never requires invalidation, and a shared backend is coherent across
-processes without any coordination.
+keyed by immutable (database, thread, namespace, checkpoint_id, channel) tuples.
+A sealed checkpoint history never changes, so existing entries need no
+invalidation for correctness. A read-through fill can nevertheless outlive a
+thread deletion or prune: each namespace therefore has a generation captured
+before source reads, and a fill may publish only while that generation is still
+current. Thread-scoped deletion advances the generation before purging entries.
+Redis shares this fence across workers with an atomic compare-and-write; the
+memory backend checks it under the LRU lock.
 
-The only delete API is thread-scoped (``adelete_thread``/``delete_thread``),
-and it exists purely for data lifecycle, not correctness: when the source
-checkpoints are erased (thread deletion, tenant offboarding, GDPR-style
-erasure), the cached history payloads for that thread must go too instead of
-lingering until LRU eviction or TTL expiry.
+The delete API is thread-scoped (``adelete_thread``/``delete_thread``) and
+exists for data lifecycle: when source checkpoints are erased (thread deletion,
+tenant offboarding, or GDPR-style erasure), cached history payloads must not be
+reintroduced by a read that began before the purge.
 """
 
 from __future__ import annotations
@@ -71,10 +73,17 @@ class CheckpointCacheStats:
 
 
 class CheckpointHistoryCache(Protocol):
-    """Async backend contract. Deletes are thread-scoped lifecycle purges only."""
+    """Async backend contract with generation-fenced read-through fills."""
 
     async def aget_many(self, keys: list[str]) -> dict[str, dict[str, Any]]: ...
     async def aset_many(self, entries: dict[str, dict[str, Any]]) -> None: ...
+    async def aget_generation(self, key_prefix: str) -> int | str | None: ...
+    async def aset_many_if_generation(
+        self,
+        key_prefix: str,
+        generation: int | str | None,
+        entries: dict[str, dict[str, Any]],
+    ) -> bool: ...
     async def adelete_thread(self, key_prefix: str, thread_id: str) -> None: ...
     def stats(self) -> CheckpointCacheStats: ...
     async def aclose(self) -> None: ...
@@ -85,5 +94,12 @@ class SyncCheckpointHistoryCache(Protocol):
 
     def get_many(self, keys: list[str]) -> dict[str, dict[str, Any]]: ...
     def set_many(self, entries: dict[str, dict[str, Any]]) -> None: ...
+    def get_generation(self, key_prefix: str) -> int: ...
+    def set_many_if_generation(
+        self,
+        key_prefix: str,
+        generation: int,
+        entries: dict[str, dict[str, Any]],
+    ) -> bool: ...
     def delete_thread(self, key_prefix: str, thread_id: str) -> None: ...
     def stats(self) -> CheckpointCacheStats: ...
