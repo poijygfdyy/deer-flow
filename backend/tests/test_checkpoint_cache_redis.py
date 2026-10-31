@@ -24,7 +24,7 @@ class _FakeConnectionPool:
 
 
 class _FakeRedis:
-    """Minimal async redis stand-in: mget / set / pipeline / scan / unlink."""
+    """Minimal async Redis stand-in for reads, token fencing, writes, and purge."""
 
     def __init__(self) -> None:
         self.store: dict[str, bytes] = {}
@@ -299,6 +299,7 @@ async def test_adelete_thread_outage_degrades_without_raising(monkeypatch: pytes
     with caplog.at_level("WARNING"):
         await cache.adelete_thread("p", "t1")  # must not raise
     assert "thread purge failed" in caplog.text
+    assert fake.store[cache._epoch_key("p")]  # SET fallback advanced the fence
 
 
 @pytest.mark.anyio
