@@ -121,7 +121,12 @@ class _FailingRedis(_FakeRedis):
 
         raise RedisError("connection refused")
 
-    async def scan(self, cursor: int = 0, match: str | None = None, count: int = 500) -> tuple[int, list[str]]:
+    async def scan(
+        self,
+        cursor: int = 0,
+        match: str | None = None,
+        count: int = 500,
+    ) -> tuple[int, list[str]]:
         from redis.exceptions import RedisError
 
         raise RedisError("connection refused")
@@ -295,12 +300,20 @@ async def test_conditional_write_rejects_a_fill_started_before_delete_across_cli
     # Even if Redis evicts the namespace token after the purge, a missing key
     # must not make an old writer's token valid again.
     fake.store.pop(first._epoch_key(prefix), None)
-    assert not await first.aset_many_if_generation(prefix, old_generation, {stale_key: _entry(1)})
+    assert not await first.aset_many_if_generation(
+        prefix,
+        old_generation,
+        {stale_key: _entry(1)},
+    )
     assert stale_key not in fake.store
 
     current_generation = await first.aget_generation(prefix)
     assert current_generation is not None and current_generation != old_generation
-    assert await first.aset_many_if_generation(prefix, current_generation, {fresh_key: _entry(2)})
+    assert await first.aset_many_if_generation(
+        prefix,
+        current_generation,
+        {fresh_key: _entry(2)},
+    )
     assert fresh_key in fake.store
 
 
@@ -310,7 +323,12 @@ class _EvalFailingRedis(_FakeRedis):
 
         raise RedisError("script command unavailable")
 
-    async def scan(self, cursor: int = 0, match: str | None = None, count: int = 500) -> tuple[int, list[str]]:
+    async def scan(
+        self,
+        cursor: int = 0,
+        match: str | None = None,
+        count: int = 500,
+    ) -> tuple[int, list[str]]:
         from redis.exceptions import RedisError
 
         raise RedisError("connection refused")
