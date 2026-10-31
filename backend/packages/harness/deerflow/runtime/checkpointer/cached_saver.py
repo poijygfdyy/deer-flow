@@ -125,6 +125,9 @@ class CachedHistorySaver(BaseCheckpointSaver):
             # entries is strictly more work than the raw saver's walk.
             return await self._walk_inner(config, channels)
         generation = await self._cache.aget_generation(self._key_prefix)
+        if generation is None:
+            # Without a trustworthy epoch, cached hits could outlive a purge.
+            return await self._walk_inner(config, channels)
         target = await self._inner.aget_tuple(config)
         if target is None:
             return await self._walk_inner(config, channels)

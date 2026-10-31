@@ -123,3 +123,28 @@ async def test_sync_read_through_fill_started_before_delete_cannot_repopulate():
     finally:
         inner.release.set()
         await cache.aclose()
+
+
+class _UnavailableGenerationCache(MemoryCheckpointHistoryCache):
+    async def aget_generation(self, key_prefix):
+        return None
+
+    async def aget_many(self, keys):
+        raise AssertionError("cache reads must be bypassed without a generation")
+
+
+@pytest.mark.asyncio
+async def test_async_reader_bypasses_cache_when_generation_is_unavailable():
+    inner = InMemorySaver()
+    graph = _build_graph(inner)
+    config = {"configurable": {"thread_id": "generation-unavailable"}}
+    await graph.ainvoke({"items": ["input"]}, config)
+
+    cache = _UnavailableGenerationCache()
+    saver = CachedHistorySaver(inner, cache, key_prefix="generation-unavailable")
+    try:
+        result = await saver.aget_delta_channel_history(config=config, channels=["items"])
+        assert result["items"]["writes"]
+        assert cache.stats().entries == 0
+    finally:
+        await cache.aclose()

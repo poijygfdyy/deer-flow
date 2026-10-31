@@ -222,22 +222,32 @@ class RedisCheckpointHistoryCache:
         happened; residual cache retention follows the configured TTL/eviction
         policy and this method never raises.
         """
+        epoch_key = self._epoch_key(key_prefix)
+        token = secrets.token_hex(16)
         try:
             # A random token avoids generation reuse if Redis evicts the epoch key.
             await self._client.eval(
                 _ADVANCE_GENERATION_SCRIPT,
                 1,
-                self._epoch_key(key_prefix),
-                secrets.token_hex(16),
+                epoch_key,
+                token,
             )
         except _redis_error() as exc:
-            # Keep the legacy best-effort purge even if the fence command is
-            # unavailable; in-flight fills may still survive this exceptional path.
             _warn(
-                "checkpoint history cache thread purge failed; generation fence unavailable, "
-                "continuing best-effort purge: %s",
+                "checkpoint history cache generation advance failed; retrying with SET: %s",
                 exc,
             )
+            try:
+                pipe = self._client.pipeline(transaction=False)
+                pipe.set(epoch_key, token)
+                await pipe.execute()
+            except _redis_error() as fallback_exc:
+                # Keep the legacy best-effort purge even if both fence writes fail.
+                _warn(
+                    "checkpoint history cache generation fence unavailable; "
+                    "continuing best-effort purge: %s",
+                    fallback_exc,
+                )
         stem = thread_key_stem(key_prefix, thread_id)
         # The configured namespace is a literal key prefix, not a Redis glob.
         pattern = "".join("\\" + char if char in "\\*?[]" else char for char in stem) + "*"
