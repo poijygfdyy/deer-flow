@@ -127,7 +127,10 @@ async def test_sync_read_through_fill_started_before_delete_cannot_repopulate():
 
 class _HistoryAwareSaver(InMemorySaver):
     async def aget_delta_channel_history(self, *, config, channels):
-        return {channel: {"writes": [("source", channel, ["authoritative"])]} for channel in channels}
+        return {
+            channel: {"writes": [("source", channel, ["authoritative"])]}
+            for channel in channels
+        }
 
 
 class _UnavailableGenerationCache(MemoryCheckpointHistoryCache):
