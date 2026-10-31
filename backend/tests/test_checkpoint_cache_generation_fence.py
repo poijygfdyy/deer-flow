@@ -79,7 +79,9 @@ async def test_async_read_through_fill_started_before_delete_cannot_repopulate()
     try:
         await graph.ainvoke({"items": ["input"]}, config)
         inner.block_next_get = True
-        read = asyncio.create_task(saver.aget_delta_channel_history(config=config, channels=["items"]))
+        read = asyncio.create_task(
+            saver.aget_delta_channel_history(config=config, channels=["items"])
+        )
         await asyncio.wait_for(inner.started.wait(), timeout=1)
         target = inner.captured
         assert target is not None

@@ -269,7 +269,9 @@ async def test_adelete_thread_purges_matching_keys_only(monkeypatch: pytest.Monk
 
 
 @pytest.mark.anyio
-async def test_conditional_write_rejects_a_fill_started_before_delete_across_clients(monkeypatch: pytest.MonkeyPatch):
+async def test_conditional_write_rejects_a_fill_started_before_delete_across_clients(
+    monkeypatch: pytest.MonkeyPatch,
+):
     fake = _FakeRedis()
     first = _make_cache(monkeypatch, fake)
     second = _make_cache(monkeypatch, fake)

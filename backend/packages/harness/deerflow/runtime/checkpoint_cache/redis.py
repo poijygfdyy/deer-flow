@@ -254,7 +254,11 @@ class RedisCheckpointHistoryCache:
                 if cursor == 0:
                     break
         except _redis_error() as exc:
-            _warn("checkpoint history cache thread purge failed; residual entries follow TTL/eviction policy: %s", exc)
+            _warn(
+                "checkpoint history cache thread purge failed; residual entries follow "
+                "TTL/eviction policy: %s",
+                exc,
+            )
 
     def stats(self) -> CheckpointCacheStats:
         return CheckpointCacheStats(
