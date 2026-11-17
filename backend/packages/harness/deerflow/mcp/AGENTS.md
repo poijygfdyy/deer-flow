@@ -25,6 +25,7 @@ make test-blocking-io
 - **Drain before `loop.close()`.** A loop that closes while a session owner is
   pending never runs the teardown. `asyncio.run()` drains for you; a manual loop
   owner has to.
+- **Bound disconnect cleanup.** When an MCP transport closes, evict only the still-current session and wait at most `SESSION_CLOSE_TIMEOUT` for its owner to exit. If the bound expires, preserve the original transport error while the owner teardown remains strongly supervised.
 - **Thread deletion closes every incarnation** of the user/thread pair
   (`close_thread_scope`). Use `close_scope` only when the caller holds one exact
   scope key.
