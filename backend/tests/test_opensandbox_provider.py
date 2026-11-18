@@ -1524,7 +1524,9 @@ def test_shared_skill_projection_is_uploaded_on_unrestricted_acquire_and_refresh
     remote.file_data["/mnt/user-data/workspace/keep.txt"] = b"workspace"
     assert remote.file_data["/mnt/agent-skills/public/example/SKILL.md"] == b"public skill"
     assert remote.file_data["/mnt/agent-skills/custom/private/SKILL.md"] == b"custom skill"
-    assert ("create_directories", "/mnt/agent-skills/public/example") in remote.files.calls
+    directory_call = remote.files.calls.index(("create_directories", "/mnt/agent-skills/public/example"))
+    write_call = remote.files.calls.index(("write_file", "/mnt/agent-skills/public/example/SKILL.md"))
+    assert directory_call < write_call
 
     old_skill = projection.public / "example" / "SKILL.md"
     old_skill.unlink()
@@ -1537,6 +1539,21 @@ def test_shared_skill_projection_is_uploaded_on_unrestricted_acquire_and_refresh
     assert remote.file_data["/mnt/agent-skills/public/replacement/SKILL.md"] == b"updated skill"
     assert remote.file_data["/mnt/user-data/workspace/keep.txt"] == b"workspace"
     assert any("__DF_SKILLS_READONLY_OK__" in command for command, _ in remote.commands.calls)
+    provider.shutdown()
+
+
+
+def test_threadless_acquire_still_uploads_the_shared_enabled_skills(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    provider, sdk = _install(monkeypatch)
+    projection = _skill_projection(tmp_path / "threadless-projection")
+    monkeypatch.setattr(provider, "_shared_skill_projection", lambda thread_id, user_id: projection)
+
+    sandbox_id = provider.acquire(user_id="user-1")
+
+    assert provider.get(sandbox_id) is not None
+    assert sdk.remotes[0].file_data["/mnt/skills/public/example/SKILL.md"] == b"public skill"
     provider.shutdown()
 
 

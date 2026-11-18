@@ -313,6 +313,11 @@ class OpenSandboxProvider(WarmPoolLifecycleMixin[OpenSandboxSandbox], SandboxPro
         if thread_id is None:
             sandbox_id = str(uuid.uuid4())[:8]
             sandbox = self._create_sandbox(sandbox_id, thread_id=None, user_id=user_id)
+            try:
+                self._sync_shared_agent_skills(sandbox, thread_id=None, user_id=user_id)
+            except BaseException:
+                self._destroy_quietly(sandbox, context="skill synchronization failure")
+                raise
             with self._lock:
                 if self._shutdown_called:
                     destroy_after_unlock = True
