@@ -363,13 +363,20 @@ class OpenSandboxProvider(WarmPoolLifecycleMixin[OpenSandboxSandbox], SandboxPro
                 logger.info("Rebuilding terminal OpenSandbox %s during acquire", existing)
         reclaimed = self._reclaim_warm_pool(sandbox_id)
         if reclaimed is not None:
+            reclaimed_sandbox = None
             with self._lock:
                 if self._shutdown_called:
                     raise RuntimeError("OpenSandboxProvider shut down during acquire")
-                if reclaimed in self._sandboxes:
+                reclaimed_sandbox = self._sandboxes.get(reclaimed)
+                if reclaimed_sandbox is not None:
                     self._thread_sandboxes[key] = reclaimed
-                    self._sync_shared_agent_skills(self._sandboxes[reclaimed], thread_id=thread_id, user_id=user_id)
-                    return reclaimed
+            if reclaimed_sandbox is not None:
+                self._sync_shared_agent_skills(
+                    reclaimed_sandbox,
+                    thread_id=thread_id,
+                    user_id=user_id,
+                )
+                return reclaimed
         sandbox = self._create_sandbox(sandbox_id, thread_id=thread_id, user_id=user_id)
         try:
             self._sync_shared_agent_skills(sandbox, thread_id=thread_id, user_id=user_id)

@@ -309,7 +309,6 @@ def _box(
     )
 
 
-
 def _skill_projection(root: Path) -> types.SimpleNamespace:
     categories = {}
     for category in ("public", "custom", "legacy", "integrations"):
@@ -1513,7 +1512,6 @@ def test_terminal_error_evicts_active_sandbox(monkeypatch: pytest.MonkeyPatch) -
     provider.shutdown()
 
 
-
 def test_shared_skill_projection_is_uploaded_on_unrestricted_acquire_and_refreshed_on_reuse(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1552,11 +1550,13 @@ def test_explicit_skill_sync_replaces_managed_tree_before_tools_run(
     remote.file_data["/mnt/skills/public/stale/SKILL.md"] = b"stale"
     remote.file_data["/mnt/user-data/workspace/keep.txt"] = b"workspace"
 
-    provider.sync_agent_skills(
-        sandbox_id,
-        thread_id="thread-1",
-        user_id="user-1",
-        projection=_skill_projection(tmp_path / "thread-projection"),
+    asyncio.run(
+        provider.sync_agent_skills_async(
+            sandbox_id,
+            thread_id="thread-1",
+            user_id="user-1",
+            projection=_skill_projection(tmp_path / "thread-projection"),
+        )
     )
 
     assert "/mnt/skills/public/stale/SKILL.md" not in remote.file_data
@@ -1611,8 +1611,13 @@ def test_shared_projection_is_not_uploaded_before_a_thread_policy_projection(
     provider.shutdown()
 
 
-@pytest.mark.parametrize("path", ["relative", "/", "/mnt", "/mnt/user-data/skills", "/etc/skills", "/mnt/../skills"])
-def test_provider_rejects_unsafe_skills_container_path(monkeypatch: pytest.MonkeyPatch, path: str) -> None:
+@pytest.mark.parametrize(
+    "path",
+    ["relative", "/", "/mnt", "/mnt/user-data/skills", "/etc/skills", "/mnt/../skills"],
+)
+def test_provider_rejects_unsafe_skills_container_path(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
     with pytest.raises(ValueError, match="skills.container_path"):
         _install(monkeypatch, config={"skills_container_path": path})
 
