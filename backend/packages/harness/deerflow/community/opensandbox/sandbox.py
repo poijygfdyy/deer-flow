@@ -10,6 +10,7 @@ import threading
 import time
 from contextlib import suppress
 from datetime import timedelta
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from deerflow.config.paths import VIRTUAL_PATH_PREFIX
@@ -323,6 +324,14 @@ class OpenSandboxSandbox(Sandbox):
                 previous = b""
             data = previous + content.encode("utf-8")
             self._file_op(lambda files: files.write_file(resolved, data, mode=644))
+
+    def create_directories(self, paths: list[str]) -> None:
+        """Create remote parent directories through the native filesystem API."""
+        normalized = sorted({self._resolve_path(path) for path in paths})
+        if not normalized:
+            return
+        entries = [SimpleNamespace(path=path, mode=755, owner=None, group=None) for path in normalized]
+        self._file_op(lambda files: files.create_directories(entries))
 
     def update_file(self, path: str, content: bytes) -> None:
         resolved = self._resolve_path(path)

@@ -67,6 +67,18 @@ Gateway process environment once, when `config.yaml` loads; a missing variable
 fails the load. The provider injects the resolved values unchanged, so a secret
 that itself starts with `$` reaches the sandbox intact.
 
+## Agent skills
+
+OpenSandbox uploads the enabled skill projection into `skills.container_path`
+(default `/mnt/skills`) through the native file API. An unrestricted acquire
+refreshes the shared enabled-skills view. If the thread already has a policy
+projection, the provider skips the broader shared view and the middleware uploads
+the thread-specific projection before the first tool call. Each sync replaces the
+four managed category directories and makes them read-only; acquire, policy sync
+and release share one scope serializer so a turn cannot reuse or park the sandbox
+mid-upload. A sync is limited to 2,000 files, 512 MiB total, 100 MiB per file and
+a cooperative 120-second deadline.
+
 ## Lifecycle and contract
 
 The provider derives a stable local ID from `(user_id, thread_id)`. A released

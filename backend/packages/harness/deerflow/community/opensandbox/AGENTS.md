@@ -21,6 +21,19 @@ for the SDK default.
 - **Deadline tests use execution results.** A `TimeoutError` that only a fake
   raises does not test the contract.
 
+## Skill projection
+
+- **Unrestricted acquires refresh the shared enabled-skills view.** If a thread
+  already has a policy projection, skip the shared tree; the middleware uploads
+  that narrower view before tools can run. Never expose the shared view first.
+- **Acquire, policy sync and release use the same scope serializer.** Replacing
+  the four managed category roots and uploading their files is one lifecycle
+  operation. Keep the remote view read-only after upload and preserve unrelated
+  paths under the configured skills root.
+- **Preflight the complete projection before resetting the remote tree.** Reject
+  linked or non-regular source entries and enforce file, byte and time limits so
+  a malformed source cannot erase the previous usable view.
+
 ## Output synchronization
 
 - **Release mirrors the output files to the host before it parks the client.**

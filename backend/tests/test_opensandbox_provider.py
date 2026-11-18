@@ -111,6 +111,12 @@ class _FakeFiles:
         finally:
             self._owner.stream_closed = True
 
+    def create_directories(self, entries) -> None:
+        self._guard()
+        for entry in entries:
+            self.calls.append(("create_directories", entry.path))
+            self._owner.directories.add(entry.path)
+
     def write_file(self, path: str, data: str | bytes, *, mode: int = 755) -> None:
         self._guard()
         self.calls.append(("write_file", path))
@@ -130,6 +136,19 @@ class _FakeCommands:
         self.calls.append((command, opts))
         if self._owner.command_error is not None:
             raise self._owner.command_error
+        if "__DF_SKILLS_RESET_OK__" in command:
+            match = re.search(r"rm -rf -- (.+?); mkdir -p", command)
+            assert match is not None
+            for root in shlex.split(match.group(1)):
+                for path in list(self._owner.file_data):
+                    if path == root or path.startswith(f"{root}/"):
+                        self._owner.file_data.pop(path)
+                self._owner.directories = {
+                    path for path in self._owner.directories if path != root and not path.startswith(f"{root}/")
+                }
+            return _execution(stdout=("__DF_SKILLS_RESET_OK__",))
+        if "__DF_SKILLS_READONLY_OK__" in command:
+            return _execution(stdout=("__DF_SKILLS_READONLY_OK__",))
         if command.startswith("mkdir -p /mnt/user-data/"):
             return _execution(stderr=("bootstrap failed",), exit_code=self._owner.bootstrap_exit_code)
         if command == "true":
@@ -254,7 +273,11 @@ class _TerminalApiError(RuntimeError):
 
 def _stub_config(attrs: dict[str, Any] | None = None) -> types.SimpleNamespace:
     values = {"idle_timeout": 0, **(attrs or {})}
-    return types.SimpleNamespace(sandbox=types.SimpleNamespace(**values))
+    skills_container_path = values.pop("skills_container_path", "/mnt/skills")
+    return types.SimpleNamespace(
+        sandbox=types.SimpleNamespace(**values),
+        skills=types.SimpleNamespace(container_path=skills_container_path),
+    )
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, *, sdk: _FakeSandboxClass | None = None, config: dict[str, Any] | None = None) -> tuple[OpenSandboxProvider, _FakeSandboxClass]:
@@ -284,6 +307,22 @@ def _box(
         default_command_timeout=default_command_timeout,
         on_terminal_failure=on_terminal_failure,
     )
+
+
+
+def _skill_projection(root: Path) -> types.SimpleNamespace:
+    categories = {}
+    for category in ("public", "custom", "legacy", "integrations"):
+        path = root / category
+        path.mkdir(parents=True)
+        categories[category] = path
+    public_skill = categories["public"] / "example"
+    public_skill.mkdir()
+    (public_skill / "SKILL.md").write_text("public skill", encoding="utf-8")
+    custom_skill = categories["custom"] / "private"
+    custom_skill.mkdir()
+    (custom_skill / "SKILL.md").write_text("custom skill", encoding="utf-8")
+    return types.SimpleNamespace(**categories)
 
 
 def test_missing_sdk_has_actionable_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1472,6 +1511,110 @@ def test_terminal_error_evicts_active_sandbox(monkeypatch: pytest.MonkeyPatch) -
     assert provider.get(sandbox_id) is None
     assert sdk.remotes[0].destroy_calls == 1
     provider.shutdown()
+
+
+
+def test_shared_skill_projection_is_uploaded_on_unrestricted_acquire_and_refreshed_on_reuse(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    provider, sdk = _install(monkeypatch, config={"skills_container_path": "/mnt/agent-skills"})
+    projection = _skill_projection(tmp_path / "projection")
+    monkeypatch.setattr(provider, "_shared_skill_projection", lambda thread_id, user_id: projection)
+
+    sandbox_id = provider.acquire("thread-1", user_id="user-1")
+    remote = sdk.remotes[0]
+    remote.file_data["/mnt/user-data/workspace/keep.txt"] = b"workspace"
+    assert remote.file_data["/mnt/agent-skills/public/example/SKILL.md"] == b"public skill"
+    assert remote.file_data["/mnt/agent-skills/custom/private/SKILL.md"] == b"custom skill"
+    assert ("create_directories", "/mnt/agent-skills/public/example") in remote.files.calls
+
+    old_skill = projection.public / "example" / "SKILL.md"
+    old_skill.unlink()
+    replacement = projection.public / "replacement"
+    replacement.mkdir()
+    (replacement / "SKILL.md").write_text("updated skill", encoding="utf-8")
+    assert provider.acquire("thread-1", user_id="user-1") == sandbox_id
+
+    assert "/mnt/agent-skills/public/example/SKILL.md" not in remote.file_data
+    assert remote.file_data["/mnt/agent-skills/public/replacement/SKILL.md"] == b"updated skill"
+    assert remote.file_data["/mnt/user-data/workspace/keep.txt"] == b"workspace"
+    assert any("__DF_SKILLS_READONLY_OK__" in command for command, _ in remote.commands.calls)
+    provider.shutdown()
+
+
+def test_explicit_skill_sync_replaces_managed_tree_before_tools_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    provider, sdk = _install(monkeypatch)
+    monkeypatch.setattr(provider, "_shared_skill_projection", lambda thread_id, user_id: None)
+    sandbox_id = provider.acquire("thread-1", user_id="user-1")
+    remote = sdk.remotes[0]
+    remote.file_data["/mnt/skills/public/stale/SKILL.md"] = b"stale"
+    remote.file_data["/mnt/user-data/workspace/keep.txt"] = b"workspace"
+
+    provider.sync_agent_skills(
+        sandbox_id,
+        thread_id="thread-1",
+        user_id="user-1",
+        projection=_skill_projection(tmp_path / "thread-projection"),
+    )
+
+    assert "/mnt/skills/public/stale/SKILL.md" not in remote.file_data
+    assert remote.file_data["/mnt/skills/public/example/SKILL.md"] == b"public skill"
+    assert remote.file_data["/mnt/skills/custom/private/SKILL.md"] == b"custom skill"
+    assert remote.file_data["/mnt/user-data/workspace/keep.txt"] == b"workspace"
+    provider.shutdown()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics required")
+def test_skill_sync_rejects_symlinks_before_resetting_remote_tree(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    provider, sdk = _install(monkeypatch)
+    monkeypatch.setattr(provider, "_shared_skill_projection", lambda thread_id, user_id: None)
+    sandbox_id = provider.acquire("thread-1", user_id="user-1")
+    projection = _skill_projection(tmp_path / "unsafe-projection")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    try:
+        (projection.public / "linked.txt").symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        provider.sync_agent_skills(
+            sandbox_id,
+            thread_id="thread-1",
+            user_id="user-1",
+            projection=projection,
+        )
+    assert not any("__DF_SKILLS_RESET_OK__" in command for command, _ in sdk.remotes[0].commands.calls)
+    provider.shutdown()
+
+
+def test_shared_projection_is_not_uploaded_before_a_thread_policy_projection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    provider, _ = _install(monkeypatch)
+    policy_root = tmp_path / "thread-policy"
+    policy_root.mkdir()
+    fake_paths = types.SimpleNamespace(
+        thread_skills_view_dir=lambda thread_id, user_id: policy_root,
+    )
+    monkeypatch.setattr("deerflow.config.paths.get_paths", lambda: fake_paths)
+    monkeypatch.setattr(
+        "deerflow.skills.projection.ensure_skill_projections",
+        lambda storage: pytest.fail("shared skills must not be prepared for a policy-scoped thread"),
+    )
+
+    assert provider._shared_skill_projection("thread-1", "user-1") is None
+    provider.shutdown()
+
+
+@pytest.mark.parametrize("path", ["relative", "/", "/mnt", "/mnt/user-data/skills", "/etc/skills", "/mnt/../skills"])
+def test_provider_rejects_unsafe_skills_container_path(monkeypatch: pytest.MonkeyPatch, path: str) -> None:
+    with pytest.raises(ValueError, match="skills.container_path"):
+        _install(monkeypatch, config={"skills_container_path": path})
 
 
 def test_concurrent_same_scope_acquire_creates_once(monkeypatch: pytest.MonkeyPatch) -> None:
