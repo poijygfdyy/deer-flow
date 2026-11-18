@@ -74,9 +74,10 @@ OpenSandbox uploads the enabled skill projection into `skills.container_path`
 refreshes the shared enabled-skills view. If the thread already has a policy
 projection, the provider skips the broader shared view and the middleware uploads
 the thread-specific projection before the first tool call. Each sync replaces the
-four managed category directories and makes them read-only; acquire, policy sync
-and release share one scope serializer so a turn cannot reuse or park the sandbox
-mid-upload. A sync is limited to 2,000 files, 512 MiB total, 100 MiB per file and
+four managed category directories and makes them read-only; scoped acquire,
+policy sync and release share one scope serializer so a turn cannot reuse or park
+the sandbox mid-upload. The provider snapshots this root at startup; restart the
+Gateway after changing `skills.container_path`. A sync is limited to 2,000 files, 512 MiB total, 100 MiB per file and
 a cooperative 120-second deadline.
 
 ## Lifecycle and contract

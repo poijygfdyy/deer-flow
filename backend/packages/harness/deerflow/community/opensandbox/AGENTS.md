@@ -26,7 +26,7 @@ for the SDK default.
 - **Unrestricted acquires refresh the shared enabled-skills view.** If a thread
   already has a policy projection, skip the shared tree; the middleware uploads
   that narrower view before tools can run. Never expose the shared view first.
-- **Acquire, policy sync and release use the same scope serializer.** Replacing
+- **Scoped acquire, policy sync and release use the same scope serializer.** Replacing
   the four managed category roots and uploading their files is one lifecycle
   operation. Keep the remote view read-only after upload and preserve unrelated
   paths under the configured skills root.

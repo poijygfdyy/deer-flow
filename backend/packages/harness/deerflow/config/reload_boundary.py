@@ -51,7 +51,7 @@ STARTUP_ONLY_FIELDS: dict[str, str] = {
     "stream_bridge": ("make_stream_bridge() constructs the stream-bridge singleton once during startup."),
     "sandbox": ("get_sandbox_provider() caches the provider singleton (``_default_sandbox_provider``); a different ``sandbox.use`` class path only takes effect on next process start."),
     "skills.container_path": (
-        "AioSandboxProvider and E2BSandboxProvider normalize and capture the skills mount root when their provider singleton starts; "
+        "AioSandboxProvider, E2BSandboxProvider, and OpenSandboxProvider normalize and capture the skills mount root when their provider singleton starts; "
         "sandbox identity, mounts, remote metadata, and skill synchronization must keep using that one root until the Gateway restarts."
     ),
     "log_level": (

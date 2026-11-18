@@ -117,12 +117,13 @@ def test_appconfig_schema_marks_registered_fields_with_prefix():
 
 
 def test_skills_container_path_is_registered_as_startup_only():
-    """AIO and E2B snapshot the mount root when their provider starts."""
+    """AIO, E2B and OpenSandbox snapshot the mount root at provider startup."""
     field_path = "skills.container_path"
     assert field_path in STARTUP_ONLY_FIELDS
     description = SkillsConfig.model_fields["container_path"].description or ""
     assert description.startswith(STARTUP_ONLY_PREFIX)
     assert STARTUP_ONLY_FIELDS[field_path] in description
+    assert "OpenSandboxProvider" in description
 
 
 def test_no_appconfig_field_uses_prefix_without_registration():
