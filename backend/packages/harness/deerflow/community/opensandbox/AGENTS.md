@@ -31,8 +31,9 @@ for the SDK default.
   operation. Keep the remote view read-only after upload and preserve unrelated
   paths under the configured skills root.
 - **Preflight the complete projection before resetting the remote tree.** Reject
-  linked or non-regular source entries and enforce file, byte and time limits so
-  a malformed source cannot erase the previous usable view.
+  linked or non-regular source entries and enforce file, byte and time limits.
+  If any remote mutation or upload then fails, evict the sandbox so a partial tree
+  cannot be reused by another turn.
 
 ## Output synchronization
 

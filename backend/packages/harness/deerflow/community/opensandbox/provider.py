@@ -505,8 +505,15 @@ class OpenSandboxProvider(WarmPoolLifecycleMixin[OpenSandboxSandbox], SandboxPro
         user_id: str | None,
     ) -> None:
         projection = self._shared_skill_projection(thread_id, user_id)
-        if projection is not None:
+        if projection is None:
+            return
+        try:
             self._sync_agent_skills_to_sandbox(sandbox, projection)
+        except Exception:
+            # A failed replacement may have left a partial remote tree. Never
+            # return that sandbox to a later turn for reuse.
+            self._invalidate_sandbox(sandbox.id, "skill synchronization failed")
+            raise
 
     def sync_agent_skills(
         self,
@@ -524,7 +531,11 @@ class OpenSandboxProvider(WarmPoolLifecycleMixin[OpenSandboxSandbox], SandboxPro
                 sandbox = self._sandboxes.get(sandbox_id)
             if sandbox is None:
                 raise RuntimeError(f"OpenSandbox {sandbox_id} is not available for skill synchronization")
-            self._sync_agent_skills_to_sandbox(sandbox, projection)
+            try:
+                self._sync_agent_skills_to_sandbox(sandbox, projection)
+            except Exception:
+                self._invalidate_sandbox(sandbox_id, "skill synchronization failed")
+                raise
 
     def _sync_agent_skills_to_sandbox(
         self, sandbox: OpenSandboxSandbox, projection: SkillProjectionPaths

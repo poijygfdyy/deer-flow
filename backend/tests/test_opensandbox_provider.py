@@ -1584,6 +1584,30 @@ def test_explicit_skill_sync_replaces_managed_tree_before_tools_run(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics required")
+
+def test_failed_skill_upload_evicts_the_partial_remote_sandbox(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    provider, sdk = _install(monkeypatch)
+    monkeypatch.setattr(provider, "_shared_skill_projection", lambda thread_id, user_id: None)
+    sandbox_id = provider.acquire("thread-1", user_id="user-1")
+    remote = sdk.remotes[0]
+    remote.file_data["/mnt/skills/public/stale/SKILL.md"] = b"stale"
+    remote.file_error = RuntimeError("file upload failed")
+
+    with pytest.raises(RuntimeError, match="file upload failed"):
+        provider.sync_agent_skills(
+            sandbox_id,
+            thread_id="thread-1",
+            user_id="user-1",
+            projection=_skill_projection(tmp_path / "failed-projection"),
+        )
+
+    assert provider.get(sandbox_id) is None
+    assert remote.destroy_calls == 1
+    provider.shutdown()
+
+
 def test_skill_sync_rejects_symlinks_before_resetting_remote_tree(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
